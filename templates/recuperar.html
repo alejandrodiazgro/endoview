@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block titulo %}Recuperar clave · EndoView{% endblock %}
+{% block css %}
+  .g{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;color:#1F1F1F;
+     border:1px solid #747775;border-radius:8px;padding:10px;font:600 15px system-ui,sans-serif;cursor:pointer}
+  .g:disabled{opacity:.6;cursor:wait}
+{% endblock %}
+{% block contenido %}
+<div class="tarjeta" style="max-width:460px;margin:30px auto">
+  <h1>Recuperar clave</h1>
+
+  {% if google %}
+  <h2 style="margin-top:18px">Con su cuenta de Google <span class="sub" style="font-weight:400">(necesita internet)</span></h2>
+  <button class="g" id="bG" type="button">{% include "_logo_google.html" %}<span id="bGt">Recuperar con Google</span></button>
+  <p class="sub" id="msgG" style="margin:8px 0 0;font-size:13px">Funciona si vinculó su cuenta de Google a EndoView.</p>
+  {% endif %}
+
+  <h2 style="margin-top:26px">Con su código de recuperación <span class="sub" style="font-weight:400">(sin internet)</span></h2>
+  <form method="post">
+    <label>Usuario</label>
+    <input name="usuario" autocomplete="username" required>
+    <label>Código de recuperación</label>
+    <input name="codigo" placeholder="XXXX-XXXX-XXXX" autocomplete="off" required style="text-transform:uppercase;font-family:ui-monospace,monospace">
+    <label>Clave nueva (mínimo 6)</label>
+    <input name="clave" type="password" autocomplete="new-password" minlength="6" required>
+    <label>Repetir clave nueva</label>
+    <input name="clave2" type="password" autocomplete="new-password" minlength="6" required>
+    <button class="btn ancho" style="margin-top:18px">Cambiar clave</button>
+  </form>
+
+  <p class="sub" style="margin-top:22px;font-size:13px">¿No tiene ninguno de los dos? El administrador de EndoView
+    puede darle una clave temporal desde <i>Usuarios</i>.</p>
+  <p style="margin:0"><a href="{{ url_for('login') }}">← Volver</a></p>
+</div>
+{% endblock %}
+{% block js %}
+<script>
+const bG = document.getElementById('bG');
+if (bG) bG.onclick = async () => {
+  bG.disabled = true;
+  const r = await googleFlujo('recuperar', () => { document.getElementById('bGt').textContent = 'Elija su cuenta en el navegador…'; });
+  if (r.ir) return location.href = r.ir;
+  document.getElementById('msgG').textContent = r.error || '';
+  bG.disabled = false; document.getElementById('bGt').textContent = 'Recuperar con Google';
+};
+</script>
+{% endblock %}

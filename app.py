@@ -4,6 +4,7 @@ Ejecutar:  python app.py   (se abre el navegador en http://127.0.0.1:5050)
 """
 import os
 import platform
+import secrets
 import shutil
 import subprocess
 import threading
@@ -44,16 +45,29 @@ def camara():
 def requiere_login(f):
     @wraps(f)
     def envoltura(*a, **k):
-        if "usuario" not in session or not A.perfil(session["usuario"]):
+        u = session.get("usuario")
+        if not u or not A.perfil(u):  # no existe o fue desactivado
             session.clear()
             return redirect(url_for("login"))
+        if A.usuario_info(u)["debe_cambiar"] and request.endpoint not in ("clave", "salir"):
+            return redirect(url_for("clave"))
+        return f(*a, **k)
+    return envoltura
+
+
+def requiere_admin(f):
+    @wraps(f)
+    @requiere_login
+    def envoltura(*a, **k):
+        if not A.es_admin(session["usuario"]):
+            abort(403)
         return f(*a, **k)
     return envoltura
 
 
 def mi_estudio(codigo):
     e = A.leer_estudio(codigo)
-    if not e or e.get("usuario") != session.get("usuario"):
+    if not e or (e.get("usuario") != session.get("usuario") and not A.es_admin(session.get("usuario"))):
         abort(404)
     return e
 
@@ -62,8 +76,15 @@ def mi_estudio(codigo):
 def globales():
     u = session.get("usuario")
     return {"medico": A.perfil(u) if u else None, "usuario": u,
+            "es_admin": A.es_admin(u) if u else False,
             "procedimientos": A.PROCEDIMIENTOS, "cfg": CFG,
-            "drive_listo": nube.conectado(), "version": VERSION}
+            "drive_listo": nube.conectado(u) if u else False, "version": VERSION}
+
+
+def _entrar(u):
+    session.clear()
+    session.permanent = True
+    session["usuario"] = u
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -71,14 +92,14 @@ def login():
     if not A.hay_medicos():
         return redirect(url_for("registro"))
     if request.method == "POST":
-        u = request.form.get("usuario", "")
-        if A.verificar(u, request.form.get("clave", "")):
-            session.clear()
-            session.permanent = True
-            session["usuario"] = u.strip().lower()
+        u = request.form.get("usuario", "").strip().lower()
+        r = A.verificar(u, request.form.get("clave", ""))
+        if r == "ok":
+            _entrar(u)
             return redirect(url_for("inicio"))
-        flash("Usuario o clave incorrectos.")
-    return render_template("login.html")
+        flash("Este usuario está desactivado. Pida ayuda al administrador." if r == "inactivo"
+              else "Usuario o clave incorrectos.")
+    return render_template("login.html", google=nube.disponible())
 
 
 @app.route("/salir")
@@ -87,31 +108,166 @@ def salir():
     return redirect(url_for("login"))
 
 
+# ---------------- Google: un flujo a la vez (abre el navegador) ----------------
+_g = {"estado": None, "proposito": None, "datos": None, "cred": None, "error": None, "llave": None}
+_g_lock = threading.Lock()
+
+
+@app.route("/google/iniciar", methods=["POST"])
+def google_iniciar():
+    proposito = request.get_json(force=True).get("proposito")
+    if proposito not in ("login", "registro", "conectar", "recuperar"):
+        abort(400)
+    if proposito == "conectar" and not session.get("usuario"):
+        abort(403)
+    if proposito == "registro" and A.hay_medicos() and not A.es_admin(session.get("usuario")):
+        abort(403)
+    with _g_lock:
+        if _g["estado"] == "esperando":
+            return jsonify(error="Ya hay una ventana de Google abierta. Termine ese paso primero."), 409
+        llave = secrets.token_hex(16)
+        _g.update(estado="esperando", proposito=proposito, datos=None, cred=None, error=None, llave=llave)
+    session["google_llave"] = llave
+
+    def tarea():
+        try:
+            datos, cred = nube.autorizar(con_drive=proposito in ("registro", "conectar"))
+            _g.update(estado="ok", datos=datos, cred=cred)
+        except Exception as ex:
+            _g.update(estado="error", error=str(ex)[:300])
+    threading.Thread(target=tarea, daemon=True).start()
+    return jsonify(ok=True)
+
+
+@app.route("/google/estado")
+def google_estado():
+    if session.get("google_llave") != _g["llave"]:
+        return jsonify(estado=None)
+    return jsonify(estado=_g["estado"], error=_g["error"])
+
+
+@app.route("/google/completar", methods=["POST"])
+def google_completar():
+    if session.get("google_llave") != _g["llave"] or _g["estado"] != "ok":
+        return jsonify(error="El inicio de sesión con Google no se completó."), 400
+    datos, cred, proposito = _g["datos"], _g["cred"], _g["proposito"]
+    _g.update(estado=None, cred=None, llave=None)
+    session.pop("google_llave", None)
+    correo = datos["correo"]
+
+    if proposito == "login":
+        u = A.buscar_por_google(correo)
+        if not u:
+            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario de EndoView. "
+                                 "Entre con su usuario y clave, y vincúlela en «Mi Google Drive»."), 400
+        if A.verificar_activo(u) is False:
+            return jsonify(error="Este usuario está desactivado."), 400
+        _entrar(u)
+        return jsonify(ir=url_for("inicio"))
+
+    if proposito == "recuperar":
+        u = A.buscar_por_google(correo)
+        if not u or A.verificar_activo(u) is False:
+            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario activo."), 400
+        _entrar(u)
+        session["puede_cambiar_sin_clave"] = True
+        return jsonify(ir=url_for("clave"))
+
+    if proposito == "conectar":
+        u = session["usuario"]
+        try:
+            A.vincular_google(u, correo)
+            nube.guardar_conexion(u, datos, cred)
+        except Exception as ex:
+            return jsonify(error=str(ex)), 400
+        _marcar_para_subir(u)
+        threading.Thread(target=lambda: _reservar(u), daemon=True).start()
+        return jsonify(ir=url_for("drive"))
+
+    # registro: se guarda para usarse al enviar el formulario
+    session["google_registro"] = {"correo": correo, "nombre": datos["nombre"]}
+    _pendientes_google[correo] = (datos, cred)
+    return jsonify(correo=correo, nombre=datos["nombre"])
+
+
+_pendientes_google = {}
+
+
+def _reservar(u):
+    try:
+        nube.reservar_ids(u)
+    except Exception:
+        pass
+    avisar_sincronizador()
+
+
+def _marcar_para_subir(u):
+    """Al conectar Drive, los estudios que se hicieron sin conexión también se suben."""
+    for e in A.listar_estudios(u):
+        if e["estado"] == "listo" and e.get("sync") == "sin_drive":
+            e["sync"] = "pendiente"
+            A.guardar_estudio(e)
+    avisar_sincronizador()
+
+
+# ---------------- usuarios ----------------
+def _validar_clave(f, obligatoria=True):
+    c = f.get("clave", "")
+    if not c and not obligatoria:
+        return None
+    if len(c) < 6:
+        raise ValueError("La clave debe tener al menos 6 caracteres.")
+    if c != f.get("clave2"):
+        raise ValueError("Las claves no coinciden.")
+    return c
+
+
 @app.route("/registro", methods=["GET", "POST"])
 def registro():
     primero = not A.hay_medicos()
-    if not primero and "usuario" not in session:
+    if not primero and not A.es_admin(session.get("usuario")):
         return redirect(url_for("login"))
     if request.method == "POST":
         f = request.form
+        g = session.get("google_registro") if f.get("con_google") else None
         try:
-            if len(f.get("clave", "")) < 6:
-                raise ValueError("La clave debe tener al menos 6 caracteres.")
-            if f.get("clave") != f.get("clave2"):
-                raise ValueError("Las claves no coinciden.")
+            clave = _validar_clave(f)
             if not f.get("usuario", "").strip() or not f.get("nombre", "").strip():
                 raise ValueError("Usuario y nombre son obligatorios.")
-            A.crear_medico(f["usuario"], f["clave"], f)
+            rol = "admin" if primero else ("admin" if f.get("rol") == "admin" else "medico")
+            codigo = A.crear_medico(f["usuario"], clave, f, rol=rol, google=g["correo"] if g else None)
         except ValueError as e:
             flash(str(e))
-            return render_template("perfil.html", modo="registro", primero=primero, datos=f)
+            return render_template("perfil.html", modo="registro", primero=primero, datos=f,
+                                   google=nube.disponible(), g=g)
+        u = f["usuario"].strip().lower()
+        if g and g["correo"] in _pendientes_google:
+            datos, cred = _pendientes_google.pop(g["correo"])
+            try:
+                nube.guardar_conexion(u, datos, cred)
+                threading.Thread(target=lambda: _reservar(u), daemon=True).start()
+            except Exception as ex:
+                flash("La cuenta se creó, pero no se pudo conectar Google Drive: " + str(ex))
+        session.pop("google_registro", None)
         if primero:
-            session["usuario"] = f["usuario"].strip().lower()
-            session.permanent = True
-            return redirect(url_for("inicio"))
-        flash("Médico agregado.")
+            _entrar(u)
+        session["codigo_mostrar"] = {"usuario": u, "nombre": f["nombre"].strip(), "codigo": codigo}
+        return redirect(url_for("codigo_recuperacion"))
+    g = session.get("google_registro")
+    if g and g["correo"] not in _pendientes_google:  # quedó de un intento anterior
+        session.pop("google_registro", None)
+        g = None
+    return render_template("perfil.html", modo="registro", primero=primero, datos={},
+                           google=nube.disponible(), g=g)
+
+
+@app.route("/codigo")
+@requiere_login
+def codigo_recuperacion():
+    c = session.pop("codigo_mostrar", None)
+    if not c:
         return redirect(url_for("inicio"))
-    return render_template("perfil.html", modo="registro", primero=primero, datos={})
+    return render_template("codigo.html", c=c)
 
 
 @app.route("/perfil", methods=["GET", "POST"])
@@ -119,15 +275,109 @@ def registro():
 def perfil():
     u = session["usuario"]
     if request.method == "POST":
+        A.actualizar_perfil(u, request.form)
+        flash("Perfil guardado.")
+        return redirect(url_for("perfil"))
+    return render_template("perfil.html", modo="perfil", datos=A.perfil(u),
+                           info=A.usuario_info(u), cuenta_google=nube.cuenta(u))
+
+
+@app.route("/perfil/codigo", methods=["POST"])
+@requiere_login
+def perfil_codigo():
+    u = session["usuario"]
+    if not A.verificar(u, request.form.get("clave_actual", "")) == "ok":
+        flash("La clave actual no es correcta.")
+        return redirect(url_for("perfil"))
+    session["codigo_mostrar"] = {"usuario": u, "nombre": A.perfil(u)["nombre"],
+                                 "codigo": A.nuevo_codigo_recuperacion(u)}
+    return redirect(url_for("codigo_recuperacion"))
+
+
+@app.route("/clave", methods=["GET", "POST"])
+@requiere_login
+def clave():
+    u = session["usuario"]
+    info = A.usuario_info(u)
+    sin_actual = info["debe_cambiar"] or session.get("puede_cambiar_sin_clave")
+    if request.method == "POST":
         f = request.form
-        nueva = f.get("clave", "")
-        if nueva and (len(nueva) < 6 or nueva != f.get("clave2")):
-            flash("La clave nueva debe tener 6+ caracteres y coincidir.")
-        else:
-            A.actualizar_perfil(u, f, nueva or None)
-            flash("Perfil guardado.")
-            return redirect(url_for("inicio"))
-    return render_template("perfil.html", modo="perfil", datos=A.perfil(u))
+        try:
+            if not sin_actual and A.verificar(u, f.get("clave_actual", "")) != "ok":
+                raise ValueError("La clave actual no es correcta.")
+            A.cambiar_clave(u, _validar_clave(f))
+        except ValueError as e:
+            flash(str(e))
+            return render_template("clave.html", sin_actual=sin_actual, info=info)
+        session.pop("puede_cambiar_sin_clave", None)
+        flash("Clave cambiada.")
+        return redirect(url_for("inicio"))
+    return render_template("clave.html", sin_actual=sin_actual, info=info)
+
+
+@app.route("/recuperar", methods=["GET", "POST"])
+def recuperar():
+    if request.method == "POST":
+        f = request.form
+        try:
+            nueva = _validar_clave(f)
+        except ValueError as e:
+            flash(str(e))
+            return render_template("recuperar.html", google=nube.disponible())
+        if A.recuperar_con_codigo(f.get("usuario", ""), f.get("codigo", ""), nueva):
+            flash("Listo, su clave fue cambiada. Ya puede entrar.")
+            return redirect(url_for("login"))
+        flash("El usuario o el código de recuperación no coinciden.")
+    return render_template("recuperar.html", google=nube.disponible())
+
+
+@app.route("/usuarios")
+@requiere_admin
+def usuarios():
+    lista = A.lista_medicos()
+    for m in lista:
+        m["drive"] = nube.cuenta(m["usuario"]) if nube.conectado(m["usuario"]) else None
+    return render_template("usuarios.html", lista=lista)
+
+
+@app.route("/usuarios/<u>/editar", methods=["GET", "POST"])
+@requiere_admin
+def usuario_editar(u):
+    if not A.medicos().get(u):
+        abort(404)
+    if request.method == "POST":
+        A.actualizar_perfil(u, request.form)
+        flash("Datos guardados.")
+        return redirect(url_for("usuarios"))
+    return render_template("perfil.html", modo="editar", datos=A.medicos()[u]["perfil"],
+                           info=A.usuario_info(u))
+
+
+@app.route("/usuarios/<u>/accion", methods=["POST"])
+@requiere_admin
+def usuario_accion(u):
+    if not A.medicos().get(u):
+        abort(404)
+    acc = request.form.get("accion")
+    try:
+        if acc == "restablecer":
+            temporal = A.restablecer_clave(u)
+            flash(f"Clave temporal de «{u}»: {temporal}  — désela al médico; al entrar se le pedirá cambiarla.")
+        elif acc in ("activar", "desactivar"):
+            if u == session["usuario"] and acc == "desactivar":
+                raise ValueError("No puede desactivar su propio usuario.")
+            A.poner_activo(u, acc == "activar")
+            flash(f"Usuario «{u}» {'activado' if acc == 'activar' else 'desactivado'}.")
+        elif acc in ("admin", "medico"):
+            A.poner_rol(u, acc)
+            flash(f"«{u}» ahora es {'administrador' if acc == 'admin' else 'médico'}.")
+        elif acc == "desvincular":
+            A.vincular_google(u, None)
+            nube.desconectar(u)
+            flash(f"Se desvinculó la cuenta de Google de «{u}».")
+    except ValueError as e:
+        flash(str(e))
+    return redirect(url_for("usuarios"))
 
 
 # ---------------- inicio / iniciar procedimiento ----------------
@@ -137,7 +387,12 @@ def inicio():
     activo = session.get("estudio")
     if activo and A.leer_estudio(activo) and A.leer_estudio(activo)["estado"] == "capturando":
         return redirect(url_for("captura"))
-    return render_template("inicio.html", estudios=A.listar_estudios(session["usuario"])[:30])
+    u = session["usuario"]
+    estudios = A.listar_estudios(None if A.es_admin(u) else u)[:40]
+    nombres = {x["usuario"]: x["nombre"] for x in A.lista_medicos()}
+    for e in estudios:
+        e["medico_nombre"] = nombres.get(e["usuario"], e["usuario"])
+    return render_template("inicio.html", estudios=estudios, ver_todos=A.es_admin(u))
 
 
 @app.route("/iniciar", methods=["POST"])
@@ -316,7 +571,7 @@ def api_finalizar():
     return jsonify(url=url_for("estudio", codigo=e["codigo"]))
 
 
-# ---------------- procesamiento en segundo plano ----------------
+# ---------------- procesamiento (local, inmediato) ----------------
 def lanzar(codigo):
     with _lock_trab:
         if codigo in _trabajos:
@@ -325,7 +580,26 @@ def lanzar(codigo):
     threading.Thread(target=procesar, args=(codigo,), daemon=True).start()
 
 
+def _fotos_reporte(e):
+    carp = A.carpeta(e["codigo"])
+    elegidas = [f for f in sorted((f for f in e["fotos"] if f.get("orden")), key=lambda f: f["orden"])
+                if os.path.exists(os.path.join(carp, "fotos", f["archivo"]))][:8]
+    return [{"ruta": os.path.join(carp, "fotos", f["archivo"]), "nota": f["nota"]} for f in elegidas]
+
+
+def _generar_pdf(e):
+    reporte.generar(os.path.join(A.carpeta(e["codigo"]), "reporte.pdf"), e,
+                    A.medicos().get(e["usuario"], {}).get("perfil", {}), _fotos_reporte(e),
+                    e.get("enlace"))
+
+
+def _enlace(id_drive):
+    pagina = (CFG["drive"].get("pagina_url") or VISOR).strip()
+    return f"{pagina}?e={id_drive}"
+
+
 def procesar(codigo):
+    """Todo lo que se hace sin internet: video, QR y PDF. La subida la hace el sincronizador."""
     carp = A.carpeta(codigo)
     e = A.leer_estudio(codigo)
 
@@ -337,75 +611,160 @@ def procesar(codigo):
     try:
         e.pop("error", None)
         video = os.path.join(carp, "video.mp4")
-        # 1. Video final H.264
         if e.get("video_crudo") and not os.path.exists(video):
             paso("Preparando el video…")
             convertir_h264(os.path.join(carp, e["video_crudo"]), video, e.get("fps_real") or 30)
-        hay_video = os.path.exists(video)
 
-        # 2. Carpeta del estudio en Drive (su enlace va en el QR)
-        usar_drive = CFG["drive"]["habilitado"] and nube.conectado()
-        if usar_drive and not e.get("enlace"):
-            paso("Conectando con Google Drive…")
-            d = CFG["drive"]
-            correo = e.get("correo_paciente") if d["compartir"] == "restringido" else None
-            med = A.perfil(e["usuario"]) or {}
-            ini = datetime.fromisoformat(e["inicio"])
-            vence = ini + timedelta(days=d["dias_acceso"]) if d["dias_acceso"] else None
-            info = {"clinica": med.get("clinica") or med.get("nombre", ""),
-                    "medico": med.get("nombre", ""), "especialidad": med.get("especialidad", ""),
-                    "telefono": med.get("telefono", ""), "procedimiento": e["procedimiento"],
-                    "fecha": f"{ini:%d/%m/%Y}", "codigo": codigo,
-                    "vence": vence.isoformat() if vence else "",
-                    "vence_texto": f"{vence:%d/%m/%Y}" if vence else ""}
-            r = nube.carpeta_estudio(codigo, d["carpeta_raiz"], d["compartir"], correo,
-                                     d["dias_acceso"], info)
-            pagina = (d.get("pagina_url") or VISOR).strip()
-            enlace_qr = f"{pagina}?e={r['id']}" if pagina else r["enlace"]
-            paso("Carpeta creada", enlace=enlace_qr, carpeta_url=r["enlace"], drive_id=r["id"],
-                 permiso=r["permiso"], tipo_permiso=r["tipo_permiso"],
-                 dias_acceso=d["dias_acceso"])
+        dueno = e["usuario"]
+        usar_drive = CFG["drive"]["habilitado"] and nube.conectado(dueno)
+        if usar_drive and not e.get("drive_id"):
+            reservado = nube.tomar_id(dueno)  # funciona sin internet
+            if reservado:
+                e.update(drive_id=reservado, enlace=_enlace(reservado))
 
-        # 3. Reporte PDF
         paso("Generando el reporte…")
-        elegidas = [f for f in sorted((f for f in e["fotos"] if f.get("orden")),
-                                      key=lambda f: f["orden"])
-                    if os.path.exists(os.path.join(carp, "fotos", f["archivo"]))][:8]
-        fotos = [{"ruta": os.path.join(carp, "fotos", f["archivo"]), "nota": f["nota"]}
-                 for f in elegidas]
-        pdf = os.path.join(carp, "reporte.pdf")
-        reporte.generar(pdf, e, A.perfil(e["usuario"]) or {}, fotos, e.get("enlace"))
-        paso("Reporte listo", reporte=True)
-
-        # 4. Subir reporte, fotos y video a la carpeta del estudio
-        if usar_drive and not e.get("subido"):
-            id_c = e["drive_id"]
-            paso("Subiendo el reporte…", subida_pct=0)
-            nube.subir(pdf, id_c, f"Reporte_{codigo}.pdf", "application/pdf")
-            for i, f in enumerate(elegidas, 1):
-                paso(f"Subiendo fotos {i} de {len(elegidas)}…",
-                     subida_pct=int(10 * i / max(len(elegidas), 1)))
-                nube.subir(fotos[i - 1]["ruta"], id_c, f"Foto_{i:02d}.jpg", "image/jpeg")
-            if hay_video:
-                ultimo = [-1]
-
-                def prog(p):
-                    if p != ultimo[0]:
-                        ultimo[0] = p
-                        paso(f"Subiendo el video… {p}%", subida_pct=10 + int(p * 0.9))
-                nube.subir(video, id_c, f"Video_{codigo}.mp4", "video/mp4", prog)
-            e["subido"] = True
-
+        _generar_pdf(e)
         if usar_drive:
-            final = "Listo: reporte, fotos" + (" y video" if hay_video else "") + " guardados en Drive"
+            e["sync"] = e.get("sync") if e.get("sync") == "subido" else "pendiente"
+            texto = "Reporte listo. Se subirá a Google Drive en cuanto haya internet."
         else:
-            final = "Listo (guardado solo en esta computadora; Drive no está conectado)"
-        paso(final, estado="listo", subida_pct=100 if usar_drive else None)
-    except Exception as ex:  # se puede reintentar
+            e["sync"] = "sin_drive"
+            texto = "Reporte listo (guardado en esta computadora; su Google Drive no está conectado)."
+        paso(texto, estado="listo", reporte=True)
+        avisar_sincronizador()
+    except Exception as ex:
         paso("Error", estado="error", error=str(ex)[:500])
     finally:
         with _lock_trab:
             _trabajos.discard(codigo)
+
+
+# ---------------- sincronizador: sube todo en cuanto hay internet ----------------
+_sync_evento = threading.Event()
+_sync = {"en_linea": None, "actual": None, "pct": 0, "ultima": None}
+
+
+def avisar_sincronizador():
+    _sync_evento.set()
+
+
+def _info_carpeta(e):
+    med = A.medicos().get(e["usuario"], {}).get("perfil", {})
+    d = CFG["drive"]
+    ini = datetime.fromisoformat(e["inicio"])
+    vence = ini + timedelta(days=d["dias_acceso"]) if d["dias_acceso"] else None
+    return {"clinica": med.get("clinica") or med.get("nombre", ""), "medico": med.get("nombre", ""),
+            "especialidad": med.get("especialidad", ""), "telefono": med.get("telefono", ""),
+            "procedimiento": e["procedimiento"], "fecha": f"{ini:%d/%m/%Y}", "codigo": e["codigo"],
+            "vence": vence.isoformat() if vence else "",
+            "vence_texto": f"{vence:%d/%m/%Y}" if vence else ""}
+
+
+def subir_estudio(codigo):
+    e = A.leer_estudio(codigo)
+    dueno, carp = e["usuario"], A.carpeta(codigo)
+    d = CFG["drive"]
+
+    def guardar(**extra):
+        e.update(extra)
+        A.guardar_estudio(e)
+
+    _sync.update(actual=codigo, pct=0)
+    guardar(sync="subiendo", sync_error=None)
+    if not e.get("carpeta_ok"):
+        correo = e.get("correo_paciente") if d["compartir"] == "restringido" else None
+        r = nube.carpeta_estudio(dueno, codigo, d["carpeta_raiz"], datetime.fromisoformat(e["inicio"]),
+                                 d["compartir"], correo, d["dias_acceso"], _info_carpeta(e),
+                                 id_fijo=e.get("drive_id"))
+        if r["id"] != e.get("drive_id"):
+            # Sin ID reservado (o ya no válido): el QR cambia y el reporte se rehace.
+            e.update(drive_id=r["id"], enlace=_enlace(r["id"]), qr_actualizado=True)
+            _generar_pdf(e)
+        guardar(carpeta_ok=True, carpeta_url=r["enlace"], permiso=r["permiso"],
+                tipo_permiso=r["tipo_permiso"], dias_acceso=d["dias_acceso"])
+    id_c = e["drive_id"]
+    nube.subir(dueno, os.path.join(carp, "reporte.pdf"), id_c, f"Reporte_{codigo}.pdf",
+               "application/pdf", reemplazar=True)
+    fotos = _fotos_reporte(e)
+    for i, f in enumerate(fotos, 1):
+        _sync["pct"] = int(10 * i / len(fotos))
+        nube.subir(dueno, f["ruta"], id_c, f"Foto_{i:02d}.jpg", "image/jpeg")
+    video = os.path.join(carp, "video.mp4")
+    if os.path.exists(video):
+        nube.subir(dueno, video, id_c, f"Video_{codigo}.mp4", "video/mp4",
+                   lambda p: _sync.__setitem__("pct", 10 + int(p * 0.9)))
+    guardar(sync="subido", sync_error=None, subido=True,
+            subido_en=datetime.now().isoformat(timespec="seconds"))
+    _sync.update(actual=None, pct=100)
+
+
+def _revocar_vencidos():
+    for e in A.listar_estudios():
+        if (e.get("tipo_permiso") == "anyone" and not e.get("acceso_retirado") and e.get("dias_acceso")
+                and nube.conectado(e["usuario"])):
+            vence = datetime.fromisoformat(e["inicio"]) + timedelta(days=e["dias_acceso"])
+            if datetime.now() > vence:
+                try:
+                    nube.revocar(e["usuario"], e["drive_id"], e["permiso"])
+                    e["acceso_retirado"] = True
+                    A.guardar_estudio(e)
+                except Exception:
+                    pass
+
+
+def sincronizador():
+    ultima_revision = 0.0
+    while True:
+        _sync_evento.wait(timeout=30)
+        _sync_evento.clear()
+        try:
+            pendientes = [e for e in A.pendientes_de_subir() if e["estado"] == "listo"
+                          and nube.conectado(e["usuario"])]
+            usuarios = [u for u in A.medicos() if nube.conectado(u)]
+            if not pendientes and not usuarios:
+                continue
+            _sync["en_linea"] = nube.en_linea()
+            if not _sync["en_linea"]:
+                continue
+            for u in usuarios:  # mantener la reserva de IDs para QR sin internet
+                try:
+                    nube.reservar_ids(u)
+                except Exception:
+                    pass
+            for e in sorted(pendientes, key=lambda x: x["codigo"]):
+                try:
+                    subir_estudio(e["codigo"])
+                except Exception as ex:
+                    est = A.leer_estudio(e["codigo"])
+                    est.update(sync="error", sync_error=str(ex)[:300])
+                    A.guardar_estudio(est)
+                    _sync["actual"] = None
+                    if not nube.en_linea():
+                        _sync["en_linea"] = False
+                        break
+            _sync["ultima"] = datetime.now().isoformat(timespec="seconds")
+            if time.time() - ultima_revision > 12 * 3600:
+                ultima_revision = time.time()
+                _revocar_vencidos()
+        except Exception:
+            pass
+
+
+@app.route("/api/sync")
+@requiere_login
+def api_sync():
+    u = session["usuario"]
+    pend = [e for e in A.pendientes_de_subir() if e["usuario"] == u]
+    return jsonify(en_linea=_sync["en_linea"], pendientes=len(pend), actual=_sync["actual"],
+                   pct=_sync["pct"], conectado=nube.conectado(u),
+                   errores=sum(1 for e in pend if e.get("sync") == "error"))
+
+
+@app.route("/api/sync/ahora", methods=["POST"])
+@requiere_login
+def api_sync_ahora():
+    avisar_sincronizador()
+    return jsonify(ok=True)
 
 
 @app.route("/estudio/<codigo>")
@@ -438,44 +797,24 @@ def api_abrir(codigo):
 
 
 # ---------------- Google Drive ----------------
-_drive_estado = {"conectando": False, "error": None}
 
 
 @app.route("/drive")
 @requiere_login
 def drive():
-    return render_template("drive.html", disponible=nube.disponible(),
-                           conectado=nube.conectado(), cuenta=nube.cuenta(),
-                           estado=_drive_estado, carpeta_datos=A.BASE)
-
-
-@app.route("/drive/conectar", methods=["POST"])
-@requiere_login
-def drive_conectar():
-    if not _drive_estado["conectando"]:
-        def tarea():
-            _drive_estado.update(conectando=True, error=None)
-            try:
-                nube._servicio = None
-                nube.servicio()  # abre el navegador para autorizar
-            except Exception as ex:
-                _drive_estado["error"] = str(ex)[:300]
-            finally:
-                _drive_estado["conectando"] = False
-        threading.Thread(target=tarea, daemon=True).start()
-    return jsonify(ok=True)
-
-
-@app.route("/drive/estado")
-@requiere_login
-def drive_estado():
-    return jsonify(conectado=nube.conectado(), **_drive_estado)
+    u = session["usuario"]
+    pend = [e for e in A.pendientes_de_subir() if e["usuario"] == u]
+    return render_template("drive.html", disponible=nube.disponible(), conectado=nube.conectado(u),
+                           cuenta=nube.cuenta(u), carpeta_datos=A.BASE, pendientes=len(pend),
+                           reserva=nube.ids_reservados(u) if nube.conectado(u) else 0)
 
 
 @app.route("/drive/desconectar", methods=["POST"])
 @requiere_login
 def drive_desconectar():
-    nube.desconectar()
+    u = session["usuario"]
+    nube.desconectar(u)
+    A.vincular_google(u, None)
     return redirect(url_for("drive"))
 
 
@@ -523,18 +862,23 @@ def datos_abrir():
 @requiere_login
 def api_trabajo(codigo):
     e = mi_estudio(codigo)
-    return jsonify({k: e.get(k) for k in ("estado", "paso", "subida_pct", "enlace", "carpeta_url",
-                                           "reporte", "subido", "error")})
+    r = {k: e.get(k) for k in ("estado", "paso", "enlace", "carpeta_url", "reporte", "subido",
+                               "error", "sync", "sync_error", "qr_actualizado")}
+    r["pct"] = _sync["pct"] if _sync["actual"] == codigo else None
+    r["en_linea"] = _sync["en_linea"]
+    return jsonify(r)
 
 
 @app.route("/api/reintentar/<codigo>", methods=["POST"])
 @requiere_login
 def api_reintentar(codigo):
     e = mi_estudio(codigo)
-    if e["estado"] != "capturando":
+    if e["estado"] == "error":
         e["estado"] = "procesando"
         A.guardar_estudio(e)
         lanzar(codigo)
+    elif e.get("sync") in ("error", "pendiente"):
+        avisar_sincronizador()
     return jsonify(ok=True)
 
 
@@ -547,23 +891,23 @@ def archivo(codigo, ruta):
 
 # ---------------- mantenimiento al arrancar ----------------
 def mantenimiento():
-    time.sleep(3)
+    time.sleep(2)
     threading.Thread(target=actualizador.buscar, daemon=True).start()
+    admins = [u for u in A.medicos() if A.es_admin(u)]
+    nube.migrar_token_global(admins[0] if admins else None)
     for e in A.listar_estudios():
-        # Retomar trabajos interrumpidos (p. ej. se apagó la computadora)
-        if e["estado"] == "procesando":
+        if e["estado"] in ("procesando", "error"):  # interrumpidos o de versiones anteriores
             lanzar(e["codigo"])
-        # Retirar acceso público a videos vencidos
-        if (e.get("tipo_permiso") == "anyone" and not e.get("acceso_retirado")
-                and e.get("dias_acceso") and nube.conectado()):
-            vence = datetime.fromisoformat(e["inicio"]) + timedelta(days=e["dias_acceso"])
-            if datetime.now() > vence:
-                try:
-                    nube.revocar(e["drive_id"], e["permiso"])
-                    e["acceso_retirado"] = True
-                    A.guardar_estudio(e)
-                except Exception:
-                    pass
+        elif e["estado"] == "listo" and "sync" not in e:  # estudios de la versión 1.1
+            if e.get("subido"):
+                e["sync"] = "subido"
+            else:
+                e["sync"] = "pendiente" if nube.conectado(e["usuario"]) else "sin_drive"
+            if e.get("drive_id"):
+                e["carpeta_ok"] = True
+            A.guardar_estudio(e)
+    threading.Thread(target=sincronizador, daemon=True).start()
+    avisar_sincronizador()
 
 
 def puerto_libre(puerto):

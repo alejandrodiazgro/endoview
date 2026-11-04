@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block titulo %}Código de recuperación · EndoView{% endblock %}
+{% block css %}
+  .codigo{font:700 34px ui-monospace,Consolas,monospace;letter-spacing:3px;text-align:center;background:#F7F9FB;
+          border:2px dashed var(--azul);border-radius:10px;padding:22px;margin:18px 0;color:var(--azul)}
+  @media print{header.barra,footer,.no-imp,#actz{display:none!important} body{background:#fff}}
+{% endblock %}
+{% block contenido %}
+<div class="tarjeta" style="max-width:620px;margin:0 auto">
+  <h1>Código de recuperación</h1>
+  <p class="sub" style="margin-bottom:0">{{ c.nombre }} · usuario <b>{{ c.usuario }}</b></p>
+  <div class="codigo">{{ c.codigo }}</div>
+  <p>Si olvida su clave y no hay internet, con este código puede crear una clave nueva
+    (en la pantalla de entrada: <i>¿Olvidó su clave?</i>).</p>
+  <p><b>Imprímalo o anótelo y guárdelo en un lugar seguro.</b> No se volverá a mostrar.</p>
+  <div class="no-imp" style="display:flex;gap:10px;margin-top:20px">
+    <button class="btn" onclick="window.print()">Imprimir</button>
+    <a class="btn sec" href="{{ url_for('inicio') }}">Ya lo guardé, continuar</a>
+  </div>
+</div>
+{% endblock %}

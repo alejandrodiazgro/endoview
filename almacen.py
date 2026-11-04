@@ -109,50 +109,198 @@ def secreto():
         return f.read().strip()
 
 
-# ---------------- Médicos ----------------
+# ---------------- Médicos (usuarios) ----------------
 CAMPOS_PERFIL = ["nombre", "especialidad", "cedula", "cedula_esp", "clinica",
                  "direccion", "telefono", "correo"]
+_ALFABETO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # sin 0/O ni 1/I para que se lea fácil
+
+
+def _codigo_aleatorio(grupos=3, largo=4):
+    return "-".join("".join(secrets.choice(_ALFABETO) for _ in range(largo))
+                    for _ in range(grupos))
+
+
+def _normalizar(todos):
+    """Completa datos de usuarios creados con versiones anteriores. Garantiza un administrador."""
+    cambio = False
+    for m in todos.values():
+        for k, v in (("rol", "medico"), ("activo", True), ("google", None)):
+            if k not in m:
+                m[k] = v
+                cambio = True
+    activos = [u for u, m in todos.items() if m["activo"]]
+    if activos and not any(todos[u]["rol"] == "admin" for u in activos):
+        primero = min(activos, key=lambda u: todos[u].get("creado", ""))
+        todos[primero]["rol"] = "admin"
+        cambio = True
+    return cambio
 
 
 def medicos():
-    return _leer(ARCH_MEDICOS, {})
+    todos = _leer(ARCH_MEDICOS, {})
+    if _normalizar(todos):
+        with _lock:
+            _escribir(ARCH_MEDICOS, todos)
+    return todos
 
 
 def hay_medicos():
     return bool(medicos())
 
 
-def crear_medico(usuario, clave, perfil):
+def _guardar(todos):
+    _escribir(ARCH_MEDICOS, todos)
+
+
+def crear_medico(usuario, clave, perfil, rol=None, google=None):
+    """Crea el usuario y devuelve su código de recuperación (se muestra una sola vez)."""
     usuario = usuario.strip().lower()
+    if not usuario.replace(".", "").replace("_", "").replace("-", "").isalnum():
+        raise ValueError("El usuario solo puede tener letras, números, punto, guion o guion bajo.")
+    codigo = _codigo_aleatorio()
     with _lock:
         todos = medicos()
         if usuario in todos:
             raise ValueError("Ese usuario ya existe.")
+        if google and any(m.get("google") == google for m in todos.values()):
+            raise ValueError("Esa cuenta de Google ya está vinculada a otro usuario.")
         todos[usuario] = {
             "clave": generate_password_hash(clave),
-            "perfil": {k: perfil.get(k, "").strip() for k in CAMPOS_PERFIL},
+            "perfil": {k: (perfil.get(k) or "").strip() for k in CAMPOS_PERFIL},
             "creado": datetime.now().isoformat(timespec="seconds"),
+            "rol": rol or ("admin" if not todos else "medico"),
+            "activo": True,
+            "google": google,
+            "recuperacion": generate_password_hash(codigo),
+            "debe_cambiar": False,
         }
-        _escribir(ARCH_MEDICOS, todos)
+        _guardar(todos)
+    return codigo
 
 
 def verificar(usuario, clave):
+    """'ok', 'inactivo' o None si el usuario o la clave no coinciden."""
     m = medicos().get(usuario.strip().lower())
-    return bool(m) and check_password_hash(m["clave"], clave)
+    if not m or not check_password_hash(m["clave"], clave):
+        return None
+    return "ok" if m["activo"] else "inactivo"
+
+
+def verificar_activo(usuario):
+    m = medicos().get(usuario)
+    return None if not m else bool(m["activo"])
+
+
+def usuario_info(usuario):
+    m = medicos().get(usuario)
+    if not m:
+        return None
+    return {"usuario": usuario, "rol": m["rol"], "activo": m["activo"],
+            "google": m.get("google"), "debe_cambiar": m.get("debe_cambiar", False),
+            "creado": m.get("creado", ""), **m["perfil"]}
+
+
+def lista_medicos():
+    return sorted((usuario_info(u) for u in medicos()), key=lambda x: (not x["activo"], x["nombre"].lower()))
+
+
+def es_admin(usuario):
+    m = medicos().get(usuario)
+    return bool(m and m["activo"] and m["rol"] == "admin")
 
 
 def perfil(usuario):
     m = medicos().get(usuario)
-    return m["perfil"] if m else None
+    return m["perfil"] if m and m["activo"] else None
 
 
 def actualizar_perfil(usuario, datos, clave_nueva=None):
     with _lock:
         todos = medicos()
-        todos[usuario]["perfil"] = {k: datos.get(k, "").strip() for k in CAMPOS_PERFIL}
+        todos[usuario]["perfil"] = {k: (datos.get(k) or "").strip() for k in CAMPOS_PERFIL}
         if clave_nueva:
             todos[usuario]["clave"] = generate_password_hash(clave_nueva)
-        _escribir(ARCH_MEDICOS, todos)
+            todos[usuario]["debe_cambiar"] = False
+        _guardar(todos)
+
+
+def cambiar_clave(usuario, nueva):
+    with _lock:
+        todos = medicos()
+        todos[usuario]["clave"] = generate_password_hash(nueva)
+        todos[usuario]["debe_cambiar"] = False
+        _guardar(todos)
+
+
+def restablecer_clave(usuario):
+    """Clave temporal (la pide cambiar al entrar). Devuelve la clave temporal."""
+    temporal = _codigo_aleatorio(2, 4)
+    with _lock:
+        todos = medicos()
+        todos[usuario]["clave"] = generate_password_hash(temporal)
+        todos[usuario]["debe_cambiar"] = True
+        _guardar(todos)
+    return temporal
+
+
+def nuevo_codigo_recuperacion(usuario):
+    codigo = _codigo_aleatorio()
+    with _lock:
+        todos = medicos()
+        todos[usuario]["recuperacion"] = generate_password_hash(codigo)
+        _guardar(todos)
+    return codigo
+
+
+def recuperar_con_codigo(usuario, codigo, nueva):
+    usuario = usuario.strip().lower()
+    codigo = codigo.strip().upper().replace(" ", "")
+    if len(codigo) == 12 and "-" not in codigo:
+        codigo = f"{codigo[:4]}-{codigo[4:8]}-{codigo[8:]}"
+    m = medicos().get(usuario)
+    if not m or not m["activo"] or not m.get("recuperacion") or \
+            not check_password_hash(m["recuperacion"], codigo):
+        return False
+    cambiar_clave(usuario, nueva)
+    return True
+
+
+def _admins_activos(todos, excepto=None):
+    return [u for u, m in todos.items() if m["activo"] and m["rol"] == "admin" and u != excepto]
+
+
+def poner_activo(usuario, activo):
+    with _lock:
+        todos = medicos()
+        if not activo and todos[usuario]["rol"] == "admin" and not _admins_activos(todos, usuario):
+            raise ValueError("Debe quedar al menos un administrador activo.")
+        todos[usuario]["activo"] = bool(activo)
+        _guardar(todos)
+
+
+def poner_rol(usuario, rol):
+    with _lock:
+        todos = medicos()
+        if rol != "admin" and todos[usuario]["rol"] == "admin" and not _admins_activos(todos, usuario):
+            raise ValueError("Debe quedar al menos un administrador activo.")
+        todos[usuario]["rol"] = "admin" if rol == "admin" else "medico"
+        _guardar(todos)
+
+
+def vincular_google(usuario, correo):
+    with _lock:
+        todos = medicos()
+        if correo and any(m.get("google") == correo for u, m in todos.items() if u != usuario):
+            raise ValueError("Esa cuenta de Google ya está vinculada a otro usuario.")
+        todos[usuario]["google"] = correo
+        _guardar(todos)
+
+
+def buscar_por_google(correo):
+    for u, m in medicos().items():
+        if correo and m.get("google") == correo:
+            return u
+    return None
 
 
 # ---------------- Estudios ----------------
@@ -175,6 +323,10 @@ def guardar_estudio(est):
 
 def leer_estudio(codigo):
     return _leer(os.path.join(carpeta(codigo), "estudio.json"), None)
+
+
+def pendientes_de_subir():
+    return [e for e in listar_estudios() if e.get("sync") in ("pendiente", "subiendo", "error")]
 
 
 def listar_estudios(usuario=None):

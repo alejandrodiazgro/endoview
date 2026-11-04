@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block titulo %}Iniciar sesión · EndoView{% endblock %}
+{% block css %}
+  .g{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;color:#1F1F1F;
+     border:1px solid #747775;border-radius:8px;padding:10px;font:600 15px system-ui,sans-serif;cursor:pointer}
+  .g:hover{background:#F6F8FA} .g:disabled{opacity:.6;cursor:wait}
+  .o{display:flex;align-items:center;gap:10px;color:var(--gris);font-size:13px;margin:18px 0}
+  .o:before,.o:after{content:"";flex:1;border-top:1px solid var(--linea)}
+{% endblock %}
 {% block contenido %}
-<div class="tarjeta" style="max-width:400px;margin:60px auto">
+<div class="tarjeta" style="max-width:400px;margin:50px auto">
   <h1>EndoView</h1>
   <p class="sub">Inicie sesión con su usuario de médico.</p>
   <form method="post">
@@ -11,5 +18,27 @@
     <input id="c" name="clave" type="password" autocomplete="current-password" required>
     <button class="btn ancho" style="margin-top:20px">Entrar</button>
   </form>
+  <p style="text-align:center;margin:14px 0 0;font-size:14px"><a href="{{ url_for('recuperar') }}">¿Olvidó su clave?</a></p>
+  {% if google %}
+  <div class="o">o, si hay internet</div>
+  <button class="g" id="bG" type="button">
+    {% include "_logo_google.html" %}<span id="bGt">Entrar con Google</span>
+  </button>
+  <p class="sub" id="msgG" style="margin:10px 0 0;font-size:13px"></p>
+  {% endif %}
 </div>
+{% endblock %}
+{% block js %}
+<script>
+const bG = document.getElementById('bG');
+if (bG) bG.onclick = async () => {
+  bG.disabled = true;
+  const r = await googleFlujo('login', () => {
+    document.getElementById('bGt').textContent = 'Elija su cuenta en el navegador…';
+  });
+  if (r.ir) return location.href = r.ir;
+  document.getElementById('msgG').textContent = r.error || '';
+  bG.disabled = false; document.getElementById('bGt').textContent = 'Entrar con Google';
+};
+</script>
 {% endblock %}

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block titulo %}Google Drive · EndoView{% endblock %}
+{% block titulo %}Mi Google Drive · EndoView{% endblock %}
 {% block css %}
   .estado{display:flex;align-items:center;gap:10px;font-weight:600;margin:6px 0 14px}
   .punto{width:12px;height:12px;border-radius:50%;background:#C62828}
@@ -12,34 +12,35 @@
 {% endblock %}
 {% block contenido %}
 <div class="tarjeta" style="max-width:760px;margin:0 auto">
-  <h1>Google Drive</h1>
-  <p class="sub">Al finalizar cada estudio, EndoView guarda en su Drive el reporte, las fotos y el video, y el QR
-    del reporte abre una página donde el paciente los ve y descarga.</p>
+  <h1>Mi Google Drive</h1>
+  <p class="sub">Sus estudios (reporte, fotos y video) se guardan en <b>su</b> Google Drive. Cada médico conecta su propia cuenta.</p>
 
   <div class="estado"><span class="punto {{ 'ok' if conectado }}"></span>
-    <span>{% if conectado %}Conectado{% if cuenta %} como {{ cuenta }}{% endif %}{% else %}No conectado{% endif %}</span>
+    <span>{% if conectado %}Conectado como {{ cuenta or 'su cuenta de Google' }}{% else %}No conectado{% endif %}</span>
   </div>
 
   {% if conectado %}
     <ul class="lista">
-      <li>Los estudios se guardan en la carpeta <b>{{ cfg.drive.carpeta_raiz }}</b> de su Drive, por año y mes.</li>
-      <li>EndoView solo puede ver los archivos que él mismo sube; el resto de su Drive es privado.</li>
-      <li>El paciente puede ver sus archivos durante {{ cfg.drive.dias_acceso }} días.</li>
+      <li>Sin internet todo sigue funcionando: el reporte sale con su QR y los archivos se suben solos en cuanto
+        regresa la conexión{% if pendientes %} — <b>{{ pendientes }} estudio(s) por subir</b>{% endif %}.</li>
+      <li>QR listos para usar sin internet: <b>{{ reserva }}</b> (se renuevan solos cuando hay conexión).</li>
+      <li>Los estudios se guardan en la carpeta <b>{{ cfg.drive.carpeta_raiz }}</b> de su Drive, por año y mes.
+        EndoView solo puede ver los archivos que él mismo sube.</li>
+      <li>Con esta misma cuenta puede <b>entrar con Google</b> y <b>recuperar su clave</b>.</li>
     </ul>
-    <form method="post" action="{{ url_for('drive_desconectar') }}" style="margin-top:18px"
-          onsubmit="return confirm('¿Desconectar Google Drive? Los estudios nuevos se guardarán solo en esta computadora.')">
-      <button class="btn sec">Desconectar o cambiar de cuenta</button>
-    </form>
+    <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
+      {% if pendientes %}<button class="btn" onclick="fetch('/api/sync/ahora',{method:'POST'}).then(()=>this.textContent='Subiendo…')">Subir pendientes ahora</button>{% endif %}
+      <form method="post" action="{{ url_for('drive_desconectar') }}"
+            onsubmit="return confirm('¿Desconectar su Google Drive? Sus estudios nuevos se guardarán solo en esta computadora.')">
+        <button class="btn sec">Desconectar o cambiar de cuenta</button>
+      </form>
+    </div>
   {% elif disponible %}
-    <button class="g" id="bCon">
-      <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.2l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.7c-.5-1.4-.8-3-.8-4.7s.3-3.2.8-4.7l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.8l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
-      <span id="bConTxt">Iniciar sesión con Google</span>
-    </button>
-    <p class="sub" id="msg" style="margin-top:12px">Se abrirá su navegador: elija la cuenta de Google del consultorio
-      y pulse <b>Continuar</b> / <b>Permitir</b>.</p>
+    <button class="g" id="bCon">{% include "_logo_google.html" %}<span id="bConTxt">Iniciar sesión con Google</span></button>
+    <p class="sub" id="msg" style="margin-top:12px">Necesita internet solo esta vez. Se abrirá su navegador: elija su cuenta
+      y pulse <b>Continuar</b>. Si aparece «Google no verificó esta app», pulse <i>Configuración avanzada → Ir a EndoView</i>.</p>
   {% else %}
-    <div class="aviso">Esta copia de EndoView no incluye la conexión con Google. Instale la versión oficial
-      o actualice el programa.</div>
+    <div class="aviso">Esta copia de EndoView no incluye la conexión con Google. Actualice el programa.</div>
   {% endif %}
 
   <h2 style="margin-top:28px">Datos en esta computadora</h2>
@@ -52,18 +53,11 @@
 <script>
 const b = document.getElementById('bCon');
 if (b) b.onclick = async () => {
-  b.disabled = true; document.getElementById('bConTxt').textContent = 'Esperando en el navegador…';
-  await fetch('{{ url_for('drive_conectar') }}', {method:'POST'});
-  const revisar = async () => {
-    const s = await (await fetch('{{ url_for('drive_estado') }}')).json();
-    if (s.conectado) return location.reload();
-    if (s.error) {
-      document.getElementById('msg').textContent = 'No se pudo conectar: ' + s.error;
-      b.disabled = false; document.getElementById('bConTxt').textContent = 'Intentar de nuevo'; return;
-    }
-    setTimeout(revisar, 1500);
-  };
-  revisar();
+  b.disabled = true;
+  const r = await googleFlujo('conectar', () => { document.getElementById('bConTxt').textContent = 'Elija su cuenta en el navegador…'; });
+  if (r.ir) return location.reload();
+  document.getElementById('msg').textContent = 'No se pudo conectar: ' + (r.error || '');
+  b.disabled = false; document.getElementById('bConTxt').textContent = 'Intentar de nuevo';
 };
 </script>
 {% endblock %}

@@ -1,41 +1,66 @@
 {% extends "base.html" %}
-{% block titulo %}{{ 'Perfil del médico' }} · EndoView{% endblock %}
+{% block titulo %}Perfil del médico · EndoView{% endblock %}
+{% block css %}
+  .g{display:inline-flex;align-items:center;gap:10px;background:#fff;color:#1F1F1F;border:1px solid #747775;
+     border-radius:8px;padding:9px 16px;font:600 14px system-ui,sans-serif;cursor:pointer}
+  .g:disabled{opacity:.6;cursor:wait}
+  .caja{background:#F7F9FB;border:1px solid var(--linea);border-radius:8px;padding:12px 14px;margin-top:8px}
+  .chip-g{display:inline-flex;align-items:center;gap:8px;background:#EAF5EA;color:#1E5B21;border-radius:20px;padding:4px 12px;font-size:13px;font-weight:600}
+{% endblock %}
 {% block contenido %}
 <div class="tarjeta" style="max-width:720px;margin:0 auto">
   {% if modo == 'registro' %}
     <h1>{{ 'Paso 1: Perfil del médico' if primero else 'Agregar médico' }}</h1>
-    <p class="sub">Estos datos aparecen en el encabezado y la firma de cada reporte.</p>
+    <p class="sub">{{ 'Usted será el administrador: podrá agregar médicos y restablecer claves.' if primero
+                     else 'Estos datos aparecen en el encabezado y la firma de sus reportes.' }}</p>
+  {% elif modo == 'editar' %}
+    <h1>Editar médico: {{ info.usuario }}</h1>
+    <p class="sub">Para la clave use «Restablecer clave» en la lista de usuarios.</p>
   {% else %}
     <h1>Mi perfil</h1>
-    <p class="sub">Estos datos aparecen en el encabezado y la firma de cada reporte.</p>
+    <p class="sub">Estos datos aparecen en el encabezado y la firma de sus reportes.</p>
   {% endif %}
-  <form method="post">
-    <h2 style="margin-top:6px">Acceso</h2>
-    <div class="fila">
-      <div>
-        <label>Usuario</label>
-        {% if modo == 'registro' %}
-          <input name="usuario" value="{{ datos.usuario or '' }}" autocomplete="username" required>
+
+  <form method="post" id="fPerfil">
+    {% if modo == 'registro' %}
+      {% if google %}
+      <div class="caja">
+        {% if g %}
+          <span class="chip-g">✓ Google: {{ g.correo }}</span>
+          <input type="hidden" name="con_google" value="1">
+          <p class="sub" style="margin:8px 0 0;font-size:13px">Su Google Drive quedará conectado. Elija abajo un usuario y una
+            clave para entrar a EndoView también sin internet.</p>
         {% else %}
-          <input value="{{ usuario }}" disabled>
+          <button type="button" class="g" id="bG">{% include "_logo_google.html" %}<span id="bGt">Llenar con mi cuenta de Google</span></button>
+          <p class="sub" id="msgG" style="margin:8px 0 0;font-size:13px">Opcional (necesita internet): toma su nombre y correo, y
+            conecta su Google Drive en el mismo paso. También podrá entrar con Google y recuperar su clave.</p>
         {% endif %}
       </div>
-      <div></div>
-      <div>
-        <label>{{ 'Clave' if modo == 'registro' else 'Clave nueva (opcional)' }}</label>
-        <input name="clave" type="password" autocomplete="new-password" minlength="6"
-               {{ 'required' if modo == 'registro' }}>
+      {% endif %}
+      <h2 style="margin-top:20px">Acceso</h2>
+      <div class="fila">
+        <div><label>Usuario</label>
+          <input name="usuario" value="{{ datos.usuario or '' }}" autocomplete="username" required
+                 pattern="[A-Za-z0-9._\-]+" title="Letras, números, punto o guion"></div>
+        <div>{% if not primero %}<label>Tipo</label>
+          <select name="rol"><option value="medico">Médico</option><option value="admin">Administrador</option></select>{% endif %}</div>
+        <div><label>Clave (mínimo 6)</label>
+          <input name="clave" type="password" autocomplete="new-password" minlength="6" required></div>
+        <div><label>Repetir clave</label>
+          <input name="clave2" type="password" autocomplete="new-password" minlength="6" required></div>
       </div>
-      <div>
-        <label>Repetir clave</label>
-        <input name="clave2" type="password" autocomplete="new-password" minlength="6"
-               {{ 'required' if modo == 'registro' }}>
-      </div>
-    </div>
+    {% elif modo == 'perfil' %}
+      <h2 style="margin-top:6px">Acceso</h2>
+      <p style="margin:0">Usuario: <b>{{ usuario }}</b> · {{ 'Administrador' if info.rol == 'admin' else 'Médico' }}
+        {% if info.google %}· <span class="chip-g">Google: {{ info.google }}</span>{% endif %}</p>
+      <p style="margin:10px 0 0"><a href="{{ url_for('clave') }}">Cambiar mi clave</a> ·
+        <a href="#" onclick="document.getElementById('fCodigo').hidden=false;return false">Nuevo código de recuperación</a> ·
+        <a href="{{ url_for('drive') }}">{{ 'Mi Google Drive' if info.google else 'Vincular mi cuenta de Google' }}</a></p>
+    {% endif %}
 
     <h2 style="margin-top:24px">Datos profesionales</h2>
     <label>Nombre completo (como aparecerá en la firma)</label>
-    <input name="nombre" value="{{ datos.nombre or '' }}" placeholder="Dr. Juan Pérez López" required>
+    <input name="nombre" id="nombre" value="{{ datos.nombre or (g.nombre if g else '') }}" placeholder="Dr. Juan Pérez López" required>
     <div class="fila">
       <div><label>Especialidad</label>
         <input name="especialidad" value="{{ datos.especialidad or '' }}" placeholder="Gastroenterología y Endoscopia"></div>
@@ -48,14 +73,35 @@
       <div><label>Teléfono</label>
         <input name="telefono" value="{{ datos.telefono or '' }}"></div>
       <div><label>Correo</label>
-        <input name="correo" type="email" value="{{ datos.correo or '' }}"></div>
+        <input name="correo" id="correo" type="email" value="{{ datos.correo or (g.correo if g else '') }}"></div>
     </div>
     <label>Dirección</label>
     <input name="direccion" value="{{ datos.direccion or '' }}">
-    <button class="btn" style="margin-top:22px">{{ 'Crear perfil' if modo == 'registro' else 'Guardar' }}</button>
-    {% if modo == 'perfil' %}
-      <a class="btn sec" style="margin-top:22px;margin-left:8px" href="{{ url_for('registro') }}">Agregar otro médico</a>
-    {% endif %}
+    <button class="btn" style="margin-top:22px">{{ 'Crear usuario' if modo == 'registro' else 'Guardar' }}</button>
+    {% if modo == 'editar' %}<a class="btn sec" style="margin-top:22px;margin-left:8px" href="{{ url_for('usuarios') }}">Volver</a>{% endif %}
   </form>
+
+  {% if modo == 'perfil' %}
+  <form method="post" action="{{ url_for('perfil_codigo') }}" id="fCodigo" hidden class="caja" style="margin-top:20px">
+    <b>Nuevo código de recuperación</b>
+    <p class="sub" style="margin:4px 0 8px;font-size:13px">El código anterior dejará de funcionar. Escriba su clave actual para confirmar.</p>
+    <div style="display:flex;gap:8px"><input name="clave_actual" type="password" placeholder="Clave actual" required>
+      <button class="btn">Generar</button></div>
+  </form>
+  {% endif %}
 </div>
+{% endblock %}
+{% block js %}
+<script>
+const bG = document.getElementById('bG');
+if (bG) bG.onclick = async () => {
+  bG.disabled = true;
+  const r = await googleFlujo('registro', () => {
+    document.getElementById('bGt').textContent = 'Elija su cuenta en el navegador…';
+  });
+  if (r.correo) return location.reload();
+  document.getElementById('msgG').textContent = r.error || '';
+  bG.disabled = false; document.getElementById('bGt').textContent = 'Llenar con mi cuenta de Google';
+};
+</script>
 {% endblock %}

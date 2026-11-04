@@ -18,9 +18,17 @@ Descargue **EndoView-Setup.exe** de
 4. **Revisión de fotos**: hasta 8 fotos (2 × 4) y el reporte escrito.
 5. **Finalizar**: sale el PDF y se suben a Drive el reporte, las fotos y el video.
 
-**Google Drive**: menú *Google Drive* → **Iniciar sesión con Google**. Nada más.
-El QR del reporte abre la página del paciente (*Ver video · Ver fotos · Ver reporte*),
-disponible 90 días.
+**Google Drive (por médico)**: cada médico entra a *Mi Google Drive* → **Iniciar sesión con Google**.
+Sus estudios se guardan en *su* Drive, y con esa cuenta también puede entrar a EndoView y recuperar su clave.
+El QR del reporte abre la página del paciente (*Ver video · Ver fotos · Ver reporte*), disponible 90 días.
+
+**Sin internet**: todo funciona. El reporte sale al instante con su QR (EndoView reserva por adelantado
+los lugares en Drive) y el reporte, las fotos y el video se suben solos en cuanto regresa la conexión.
+
+**Usuarios**: el primer usuario es administrador (*Usuarios*): agrega médicos, restablece claves con una
+clave temporal, activa/desactiva y da permisos de administrador. Cada médico recibe un **código de
+recuperación** para cambiar su clave sin internet. Usuarios y claves (cifradas) se guardan solo en
+la computadora.
 
 ## Actualizaciones
 

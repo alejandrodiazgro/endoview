@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block titulo %}Cambiar clave · EndoView{% endblock %}
+{% block contenido %}
+<div class="tarjeta" style="max-width:420px;margin:30px auto">
+  <h1>{{ 'Cree su clave nueva' if sin_actual else 'Cambiar mi clave' }}</h1>
+  {% if info.debe_cambiar %}<p class="sub">El administrador le dio una clave temporal. Elija una propia para continuar.</p>{% endif %}
+  <form method="post">
+    {% if not sin_actual %}
+      <label>Clave actual</label>
+      <input name="clave_actual" type="password" autocomplete="current-password" required autofocus>
+    {% endif %}
+    <label>Clave nueva (mínimo 6)</label>
+    <input name="clave" type="password" autocomplete="new-password" minlength="6" required {{ 'autofocus' if sin_actual }}>
+    <label>Repetir clave nueva</label>
+    <input name="clave2" type="password" autocomplete="new-password" minlength="6" required>
+    <button class="btn ancho" style="margin-top:20px">Guardar clave</button>
+  </form>
+</div>
+{% endblock %}

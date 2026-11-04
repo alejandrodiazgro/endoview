@@ -58,8 +58,10 @@
 <header class="barra">
   <div class="marca">EndoView <span>· {{ medico.nombre }}</span></div>
   <nav>
+    <span id="nube" title="Estado de la subida a Google Drive" style="font-size:13px;opacity:.9"></span>
     <a href="{{ url_for('inicio') }}">Inicio</a>
-    <a href="{{ url_for('drive') }}">Google Drive</a>
+    <a href="{{ url_for('drive') }}">Mi Google Drive</a>
+    {% if es_admin %}<a href="{{ url_for('usuarios') }}">Usuarios</a>{% endif %}
     <a href="{{ url_for('perfil') }}">Mi perfil</a>
     <a href="{{ url_for('salir') }}">Salir</a>
   </nav>
@@ -75,7 +77,43 @@
   {% with m = get_flashed_messages() %}{% for x in m %}<div class="aviso">{{ x }}</div>{% endfor %}{% endwith %}
   {% block contenido %}{% endblock %}
 </main>
+<script>
+// Inicio de sesión con Google: abre el navegador, espera y completa.
+async function googleFlujo(proposito, alEsperar) {
+  const r = await fetch('/google/iniciar', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify({proposito})});
+  if (!r.ok) return {error: (await r.json().catch(() => ({}))).error || 'No se pudo iniciar.'};
+  if (alEsperar) alEsperar();
+  for (let i = 0; i < 600; i++) {
+    await new Promise(z => setTimeout(z, 1000));
+    const s = await (await fetch('/google/estado')).json();
+    if (s.estado === 'error') return {error: s.error};
+    if (s.estado === 'ok') {
+      const c = await fetch('/google/completar', {method: 'POST'});
+      return await c.json();
+    }
+    if (s.estado === null) return {error: 'Se canceló el inicio de sesión.'};
+  }
+  return {error: 'Se agotó el tiempo de espera.'};
+}
+</script>
 {% if usuario %}
+<script>
+(function () {
+  const n = document.getElementById('nube');
+  async function ver() {
+    try {
+      const s = await (await fetch('/api/sync')).json();
+      if (!s.conectado) { n.textContent = ''; return; }
+      if (s.actual) n.textContent = `☁ Subiendo… ${s.pct}%`;
+      else if (s.pendientes && s.en_linea === false) n.textContent = `☁ ${s.pendientes} por subir · sin internet`;
+      else if (s.pendientes) n.textContent = `☁ ${s.pendientes} por subir`;
+      else n.textContent = '☁ Todo en Drive';
+    } catch (e) {}
+  }
+  ver(); setInterval(ver, 5000);
+})();
+</script>
 <footer style="text-align:center;color:var(--gris);font-size:12px;padding:6px 0 18px">
   EndoView {{ version }} · <a href="#" id="actzBuscar" style="color:inherit">Buscar actualizaciones</a>
   <span id="actzMsg"></span>

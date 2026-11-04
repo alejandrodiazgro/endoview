@@ -23,6 +23,7 @@
     </div>
   </div>
   <div id="estado" class="aviso" style="margin:18px 0 0">Procesando…</div>
+  <div id="nubeEst" class="aviso" style="margin:10px 0 0" hidden></div>
   <div class="barra-p" id="barra" hidden><div></div></div>
   <iframe id="visor" hidden></iframe>
 </div>
@@ -32,27 +33,41 @@
 const COD = "{{ e.codigo }}";
 const PDF = "{{ url_for('archivo', codigo=e.codigo, ruta='reporte.pdf') }}";
 let pdfMostrado = false;
+let versionPdf = 0;
 async function revisar(){
   const s = await (await fetch('/api/trabajo/' + COD)).json();
   const est = document.getElementById('estado');
   est.textContent = s.estado === 'error' ? 'Error: ' + (s.error || '') + ' — puede reintentar.' : (s.paso || 'Procesando…');
   est.className = 'aviso' + (s.estado === 'listo' ? ' ok' : '');
-  const barra = document.getElementById('barra');
-  barra.hidden = !(s.subida_pct != null && !s.subido && s.estado === 'procesando');
-  barra.firstElementChild.style.width = (s.subida_pct || 0) + '%';
-  if (s.reporte && !pdfMostrado) {
-    pdfMostrado = true;
+  // Estado de la subida a Drive
+  const n = document.getElementById('nubeEst'), barra = document.getElementById('barra');
+  const textos = {
+    pendiente: s.en_linea === false ? '☁ Sin internet: el reporte, las fotos y el video se subirán solos en cuanto haya conexión. Puede cerrar EndoView; seguirá al volver a abrirlo.'
+                                     : '☁ En espera para subir a Google Drive…',
+    subiendo: '☁ Subiendo a Google Drive…' + (s.pct != null ? ` ${s.pct}%` : ''),
+    subido: '☁ Todo está en Google Drive. El QR del reporte ya funciona.',
+    error: '☁ No se pudo subir todavía (' + (s.sync_error || '') + '). Se volverá a intentar solo.',
+  };
+  n.hidden = !textos[s.sync]; n.textContent = textos[s.sync] || '';
+  n.className = 'aviso' + (s.sync === 'subido' ? ' ok' : '');
+  if (s.qr_actualizado && s.sync === 'subido')
+    n.textContent += ' Importante: el QR del reporte se actualizó; vuelva a imprimirlo.';
+  barra.hidden = s.sync !== 'subiendo'; barra.firstElementChild.style.width = (s.pct || 0) + '%';
+
+  const v = s.reporte ? (s.qr_actualizado ? 2 : 1) : 0;
+  if (v && v !== versionPdf) {
+    versionPdf = v;
     document.getElementById('bPdf').hidden = false;
-    const v = document.getElementById('visor'); v.src = PDF + '?t=' + Date.now(); v.hidden = false;
+    const f = document.getElementById('visor'); f.src = PDF + '?t=' + Date.now(); f.hidden = false;
   }
-  if (s.carpeta_url || s.enlace) { const b = document.getElementById('bVideo'); b.href = s.carpeta_url || s.enlace; b.hidden = !s.subido; }
-  document.getElementById('bRe').hidden = s.estado !== 'error';
-  if (s.estado === 'procesando') setTimeout(revisar, 1500);
+  if (s.carpeta_url) { const b = document.getElementById('bVideo'); b.href = s.carpeta_url; b.hidden = s.sync !== 'subido'; }
+  document.getElementById('bRe').hidden = !(s.estado === 'error' || s.sync === 'error');
+  setTimeout(revisar, ['procesando'].includes(s.estado) || ['pendiente', 'subiendo'].includes(s.sync) ? 1500 : 8000);
 }
 document.getElementById('bPdf').onclick = () => fetch('/api/abrir/' + COD + '?que=pdf', {method:'POST'});
 document.getElementById('bCarpeta').onclick = () => fetch('/api/abrir/' + COD + '?que=carpeta', {method:'POST'});
 document.getElementById('bRe').onclick = async () => {
-  await fetch('/api/reintentar/' + COD, {method:'POST'}); pdfMostrado = false; revisar();
+  await fetch('/api/reintentar/' + COD, {method:'POST'}); revisar();
 };
 revisar();
 </script>
