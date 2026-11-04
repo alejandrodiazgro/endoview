@@ -13,6 +13,9 @@
   .tab.activa{background:#fff;color:var(--brand);box-shadow:0 4px 12px rgba(16,40,48,.10)}
   .tab .n{min-width:22px;padding:0 7px;border-radius:var(--r-full);background:var(--brand);color:#fff;font-size:12px;line-height:20px;text-align:center}
   .hoja[hidden]{display:none}
+  .guardado{color:var(--success);font-weight:600;text-transform:none;letter-spacing:0;font-size:12px}
+  .guardado.pend{color:var(--text-muted)} .guardado.mal{color:var(--danger)}
+  #libre{margin-left:8px}
 
   /* Captura */
   .video{position:relative;background:#000;border-radius:20px;overflow:hidden;aspect-ratio:16/9;max-height:68vh;margin:0 auto;
@@ -75,8 +78,9 @@
   @media (max-width:820px){.rejilla{grid-template-columns:repeat(2,1fr)} .controles{grid-template-columns:1fr} .tabs{margin-left:0}}
 {% endblock %}
 {% block contenido %}
+<div class="aviso error" id="alertaGrab" hidden></div>
 <div class="paciente">
-  <div><span class="eyebrow">Procedimiento en curso</span>
+  <div><span class="eyebrow">Procedimiento en curso · <span id="guardadoTop" class="guardado">✓ Todo guardado en esta computadora</span></span>
     <b>{{ e.paciente }}</b> <span class="meta">· {{ e.edad }} años · {{ e.procedimiento }} · {{ e.codigo }}</span></div>
   <div class="tabs">
     <button class="tab activa" data-hoja="hCaptura">Captura</button>
@@ -100,7 +104,7 @@
   <div class="linea-inf">
     <span>Foto: {% for k in cfg.teclas.foto %}<kbd>{{ 'Espacio' if k == ' ' else k }}</kbd> {% endfor %}
       · Iniciar / detener: {% for k in cfg.teclas.grabar %}<kbd>{{ k }}</kbd> {% endfor %}
-      · Si detiene y vuelve a iniciar, se sigue grabando en el mismo video.</span>
+      · El video se guarda en el disco cada 30 segundos.<span id="libre"></span></span>
     <div style="min-width:360px;flex:0 1 460px">{% include "_fuente.html" %}</div>
   </div>
   <div class="tira" id="tira"></div>
@@ -115,16 +119,17 @@
   </div>
 
   <div class="reporte tarjeta">
-    <h2>Reporte</h2>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap">
+      <h2>Reporte</h2><span class="guardado" id="guardadoRep">✓ Guardado en esta computadora</span></div>
     <p class="ayuda">Así quedarán las fotos en el reporte: dos hileras de 4. Use ◀ ▶ para cambiar el orden.</p>
     <div class="rejilla" id="rejilla"></div>
 
     <label for="hall">Hallazgos</label>
-    <textarea id="hall" rows="6"></textarea>
+    <textarea id="hall" rows="6">{{ e.hallazgos or "" }}</textarea>
     <label for="dx">Diagnóstico</label>
-    <textarea id="dx" rows="3"></textarea>
+    <textarea id="dx" rows="3">{{ e.diagnostico or "" }}</textarea>
     <label for="rec2">Recomendaciones</label>
-    <textarea id="rec2" rows="3"></textarea>
+    <textarea id="rec2" rows="3">{{ e.recomendaciones or "" }}</textarea>
 
     <div class="fin">
       <button class="btn" id="bFin" style="flex:1">Finalizar y generar reporte</button>
@@ -146,6 +151,35 @@ const $ = s => document.querySelector(s);
 const url = f => BASE_FOTO + encodeURIComponent(f.archivo);
 let grabando = false;
 
+/* ---------- guardado automático (borrador) ---------- */
+let tBorrador = null, pendiente = false;
+function marcar(texto, clase) {
+  for (const id of ['guardadoTop', 'guardadoRep']) { const el = $('#' + id); el.textContent = texto; el.className = 'guardado ' + (clase || ''); }
+}
+function datosFormulario() {
+  return {hallazgos: $('#hall').value, diagnostico: $('#dx').value, recomendaciones: $('#rec2').value,
+          fotos: fotos.map(f => ({archivo: f.archivo, orden: f.orden, nota: f.nota}))};
+}
+async function guardarBorrador() {
+  clearTimeout(tBorrador); pendiente = false;
+  try {
+    const r = await fetch('/api/borrador', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                             body: JSON.stringify(datosFormulario())});
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    marcar(`✓ Guardado en esta computadora ${j.hora}`);
+  } catch (e) {
+    marcar('⚠ No se pudo guardar el borrador. Reintentando…', 'mal'); pendiente = true;
+    tBorrador = setTimeout(guardarBorrador, 3000);
+  }
+}
+function programarGuardado() {
+  pendiente = true; marcar('Guardando…', 'pend');
+  clearTimeout(tBorrador); tBorrador = setTimeout(guardarBorrador, 1200);
+}
+['#hall', '#dx', '#rec2'].forEach(id => $(id).addEventListener('input', programarGuardado));
+setInterval(() => { if (pendiente) guardarBorrador(); }, 15000);
+
 /* ---------- pestañas ---------- */
 document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('activa', x === t));
@@ -162,18 +196,18 @@ function alternar(f){
     if (n >= MAX) return avisar('Ya hay 8 fotos en el reporte. Quite una para agregar otra.');
     f.orden = n + 1;
   }
-  pintar();
+  pintar(); programarGuardado();
 }
 function mover(f, d){
   const lista = elegidas(), i = lista.indexOf(f), j = i + d;
   if (j < 0 || j >= lista.length) return;
   [lista[i].orden, lista[j].orden] = [lista[j].orden, lista[i].orden];
-  pintar();
+  pintar(); programarGuardado();
 }
 async function borrar(f){
-  if (!await confirmar('¿Borrar esta foto?', {aceptar: 'Borrar', peligro: true})) return;
+  if (!await confirmar('¿Quitar esta foto del estudio? (Se conserva aparte en la carpeta del estudio.)', {aceptar: 'Quitar', peligro: true})) return;
   await fetch('/api/foto/' + encodeURIComponent(f.archivo), {method:'DELETE'});
-  fotos.splice(fotos.indexOf(f), 1); compactar(); pintar();
+  fotos.splice(fotos.indexOf(f), 1); compactar(); pintar(); programarGuardado();
 }
 
 function pintar(){
@@ -203,7 +237,7 @@ function pintar(){
       <div class="acc"><button title="Mover a la izquierda">◀</button><input placeholder="Nota" maxlength="120">
       <button title="Mover a la derecha">▶</button><button title="Quitar del reporte">✕</button></div>`;
     const [izq, der, quitar] = c.querySelectorAll('button');
-    const inp = c.querySelector('input'); inp.value = f.nota || ''; inp.oninput = () => f.nota = inp.value;
+    const inp = c.querySelector('input'); inp.value = f.nota || ''; inp.oninput = () => { f.nota = inp.value; programarGuardado(); };
     izq.onclick = () => mover(f, -1); der.onclick = () => mover(f, 1); quitar.onclick = () => alternar(f);
     r.appendChild(c);
   }
@@ -212,11 +246,22 @@ function pintar(){
 /* ---------- foto y grabación ---------- */
 async function tomarFoto(){
   const de = $('#destello'); de.style.opacity = .7; setTimeout(() => de.style.opacity = 0, 120);
-  const j = await (await fetch('/api/foto', {method:'POST'})).json();
-  if (j.error) return avisar(j.error);
+  let j;
+  try { j = await (await fetch('/api/foto', {method:'POST'})).json(); }
+  catch (e) { j = {error: 'La foto NO se pudo guardar (EndoView no respondió).'}; }
+  if (j.error) return avisar('⚠ ' + j.error, 'error');
   fotos.push({archivo: j.archivo, orden: j.orden, nota: ''}); pintar();
+  notificar(`✓ Foto ${j.numero} guardada en esta computadora`);
 }
+let alertaVista = null, eraGrabando = null;
 function mostrarEstado(s){
+  if (eraGrabando === true && !s.grabando && s.hay_video && !s.alerta)
+    notificar(`✓ Video guardado en esta computadora (${Math.floor(s.segundos / 60)} min ${s.segundos % 60} s grabados)`);
+  eraGrabando = s.grabando;
+  const al = $('#alertaGrab'); al.hidden = !s.alerta; al.textContent = s.alerta ? '⚠ ' + s.alerta : '';
+  if (s.alerta && s.alerta !== alertaVista) { alertaVista = s.alerta; avisar('⚠ ' + s.alerta, 'error'); }
+  if (!s.alerta) alertaVista = null;
+  if (s.libre_gb != null) $('#libre').textContent = s.libre_gb < 10 ? ` · ⚠ Quedan ${s.libre_gb} GB en el disco` : '';
   grabando = s.grabando;
   $('#rec').style.display = s.hay_video ? 'flex' : 'none';
   $('#rec').classList.toggle('pausa', !s.grabando);
@@ -248,14 +293,18 @@ $('#bFin').onclick = async () => {
   if (grabando && !await confirmar('La grabación sigue activa. Se detendrá y se guardará el video. ¿Continuar?')) return;
   if (!elegidas().length && !await confirmar('No eligió fotos para el reporte. ¿Finalizar de todos modos?')) return;
   const b = $('#bFin'); b.disabled = true; b.textContent = 'Finalizando…'; window.saliendo = true;
-  const r = await fetch('/api/finalizar', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({hallazgos: $('#hall').value, diagnostico: $('#dx').value,
-                          recomendaciones: $('#rec2').value,
-                          fotos: fotos.map(f => ({archivo: f.archivo, orden: f.orden, nota: f.nota}))})});
-  location.href = (await r.json()).url;
+  try {
+    const r = await fetch('/api/finalizar', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(datosFormulario())});
+    if (!r.ok) throw new Error(r.status);
+    location.href = (await r.json()).url;
+  } catch (e) {
+    b.disabled = false; b.textContent = 'Finalizar y generar reporte'; window.saliendo = false;
+    avisar('⚠ No se pudo finalizar. Sus fotos, video y texto siguen guardados; intente de nuevo.', 'error');
+  }
 };
 window.marcarSalida = () => { window.saliendo = true; };
-window.addEventListener('beforeunload', ev => { if (!window.saliendo) ev.preventDefault(); });
+window.addEventListener('beforeunload', ev => { if (pendiente) guardarBorrador(); if (!window.saliendo) ev.preventDefault(); });
 pintar();
 </script>
 {% endblock %}

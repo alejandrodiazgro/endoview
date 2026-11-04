@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% block titulo %}Estudio {{ e.codigo }}{% endblock %}
 {% block css %}
+  .local{margin:18px 0 0;padding:18px 22px;border-radius:20px;display:flex;gap:16px;align-items:center}
+  .local.ok{background:var(--success-bg);color:var(--success);border:1px solid rgba(21,128,61,.2)}
+  .local.mal{background:var(--danger-bg);color:var(--danger);border:1px solid rgba(185,28,28,.2)}
+  .local .ic{flex:0 0 auto;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:24px;font-weight:700}
+  .local.ok .ic{background:var(--success)} .local.mal .ic{background:var(--danger)}
+  .local b{display:block;font-size:16px;letter-spacing:-.01em}
+  .local span{font-size:13px;opacity:.9}
   .cab{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
   .acciones{display:flex;gap:10px;flex-wrap:wrap}
   iframe{width:100%;height:78vh;border:1px solid var(--linea);border-radius:8px;margin-top:18px;background:#fff}
@@ -20,6 +27,7 @@
       <a class="btn sec" href="{{ url_for('inicio') }}">Nuevo procedimiento</a>
     </div>
   </div>
+  <div id="local" class="local" hidden></div>
   <div id="estado" class="aviso" style="margin:18px 0 0">Procesando…</div>
   <div id="nubeEst" class="aviso" style="margin:10px 0 0" hidden></div>
   <div class="barra-p" id="barra" hidden><div></div></div>
@@ -35,8 +43,28 @@ let versionPdf = 0;
 async function revisar(){
   const s = await (await fetch('/api/trabajo/' + COD)).json();
   const est = document.getElementById('estado');
-  est.textContent = s.estado === 'error' ? 'Error: ' + (s.error || '') + ' — puede reintentar.' : (s.paso || 'Procesando…');
+  est.textContent = s.estado === 'error' ? 'Puede reintentar con el botón «Reintentar».' : (s.paso || 'Procesando…');
   est.className = 'aviso' + (s.estado === 'listo' ? ' ok' : '');
+  // Verificación local (lo más importante: que nada se pierda)
+  const L = document.getElementById('local'), loc = s.local;
+  if (loc) {
+    L.hidden = false;
+    const min = loc.video_segundos ? `${Math.floor(loc.video_segundos / 60)} min ${Math.round(loc.video_segundos % 60)} s` : '';
+    if (loc.ok) {
+      L.className = 'local ok';
+      L.innerHTML = `<div class="ic">✓</div><div><b>GUARDADO Y VERIFICADO EN ESTA COMPUTADORA</b>
+        <span>Reporte PDF · ${loc.fotos} de ${loc.fotos_total} fotos${loc.video ? ` · Video ${min} (${loc.video_mb} MB)` : ' · sin video'}
+        · comprobado ${loc.verificado.slice(11, 16)}</span></div>`;
+    } else {
+      L.className = 'local mal';
+      L.innerHTML = `<div class="ic">!</div><div><b>REVISE: NO SE PUDO VERIFICAR TODO</b>
+        <span>${(loc.problemas || []).join(' ')} Los archivos originales se conservaron; pulse «Reintentar» o avise a soporte
+        (archivo datos/endoview.log).</span></div>`;
+    }
+  } else if (s.estado === 'error') {
+    L.hidden = false; L.className = 'local mal';
+    L.innerHTML = `<div class="ic">!</div><div><b>REVISE ESTE ESTUDIO</b><span>${s.error || ''}</span></div>`;
+  }
   // Estado de la subida a Drive
   const n = document.getElementById('nubeEst'), barra = document.getElementById('barra');
   const textos = {

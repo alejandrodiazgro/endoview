@@ -1,5 +1,22 @@
 {% extends "base.html" %}
 {% block contenido %}
+{% if libre_gb < 10 %}
+  <div class="aviso {{ 'error' if libre_gb < 3 else 'alerta' }}">⚠ Quedan solo <b>{{ libre_gb }} GB</b> libres en el disco.
+    {{ 'No se pueden iniciar estudios hasta liberar espacio.' if libre_gb < 3 else 'Libere espacio pronto: una grabación larga puede ocupar varios GB.' }}</div>
+{% endif %}
+{% if sin_terminar %}
+<div class="tarjeta" style="margin-bottom:20px;border-left:4px solid var(--danger)">
+  <h2>Estudios sin terminar</h2>
+  <p class="sub" style="margin-bottom:12px">Se cerró EndoView antes de finalizarlos. Sus fotos, video y texto están guardados: retómelos para terminar el reporte.</p>
+  <table class="lista">
+    {% for e in sin_terminar %}
+    <tr><td>{{ e.inicio[:16].replace('T', ' ') }}</td><td><b>{{ e.paciente }}</b></td><td>{{ e.procedimiento }}</td>
+      <td>{{ e.fotos|length }} fotos</td>
+      <td style="text-align:right"><form method="post" action="{{ url_for('retomar', codigo=e.codigo) }}"><button class="btn">Retomar</button></form></td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
 {% if not drive_listo %}
   <div class="aviso">Su Google Drive no está conectado: sus estudios se guardarán solo en esta computadora
     y el reporte saldrá sin QR. <a href="{{ url_for('drive') }}">Conectar mi Google Drive</a></div>
@@ -50,7 +67,7 @@
   <h2>Estudios recientes</h2>
   {% if estudios %}
   <table class="lista">
-    <tr><th>Fecha</th><th>Paciente</th><th>Procedimiento</th>{% if ver_todos %}<th>Médico</th>{% endif %}<th>Estado</th><th>Drive</th><th></th></tr>
+    <tr><th>Fecha</th><th>Paciente</th><th>Procedimiento</th>{% if ver_todos %}<th>Médico</th>{% endif %}<th>Estado</th><th>En la PC</th><th>Drive</th><th></th></tr>
     {% for e in estudios %}
     <tr>
       <td>{{ e.inicio[:10] }}</td>
@@ -58,6 +75,8 @@
       <td>{{ e.procedimiento }}</td>
       {% if ver_todos %}<td>{{ e.medico_nombre }}</td>{% endif %}
       <td><span class="chip {{ e.estado }}">{{ {'listo':'Listo','error':'Error','procesando':'Procesando','capturando':'En curso'}[e.estado] }}</span></td>
+      <td>{% if e.local and e.local.ok %}<span class="chip listo" title="Guardado y verificado {{ e.local.verificado[:16].replace('T', ' ') }}">✓ Verificado</span>
+          {% elif e.local %}<span class="chip error">Revisar</span>{% elif e.estado == 'listo' %}<span class="chip listo">Guardado</span>{% else %}—{% endif %}</td>
       <td>{% set s = e.sync %}{% if s == 'subido' %}<span class="chip listo">✓ En Drive</span>
           {% elif s in ('pendiente', 'subiendo') %}<span class="chip procesando">{{ 'Subiendo' if s == 'subiendo' else 'Por subir' }}</span>
           {% elif s == 'error' %}<span class="chip error">Reintentando</span>

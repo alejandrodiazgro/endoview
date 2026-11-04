@@ -77,6 +77,8 @@ def _escribir(ruta, datos):
     tmp = ruta + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(datos, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())  # que quede en el disco, no solo en memoria
     os.replace(tmp, ruta)
 
 
@@ -388,6 +390,27 @@ def nuevo_codigo(proc):
         c["n"] += 1
         _escribir(ARCH_CONTADOR, c)
     return f"{datetime.now():%Y-%m-%d}_{proc}_{c['n']:04d}"
+
+
+PAPELERA = os.path.join(DATOS, "papelera")
+
+
+def a_papelera(codigo):
+    """Los estudios cancelados no se borran: van a la papelera 30 días."""
+    os.makedirs(PAPELERA, exist_ok=True)
+    destino = os.path.join(PAPELERA, f"{codigo}__{datetime.now():%Y%m%d-%H%M%S}")
+    shutil.move(carpeta(codigo), destino)
+    return destino
+
+
+def vaciar_papelera(dias=30):
+    if not os.path.isdir(PAPELERA):
+        return
+    limite = datetime.now().timestamp() - dias * 86400
+    for n in os.listdir(PAPELERA):
+        r = os.path.join(PAPELERA, n)
+        if os.path.getmtime(r) < limite:
+            shutil.rmtree(r, ignore_errors=True)
 
 
 def carpeta(codigo):

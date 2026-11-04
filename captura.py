@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 
+import json
 import logging
 
 import cv2
@@ -37,11 +38,13 @@ class Capturador:
         # grabación
         self._writer = None
         self._grabando = False
-        self._archivo_crudo = None
-        self._cuadros = 0
-        self._t_grabado = 0.0
-        self._t_inicio_tramo = None
         self._tam_writer = None
+        self._carpeta = None
+        self._t_previo = 0.0
+        self._seg_inicio = 0.0
+        self._seg_cuadros = 0
+        self._seg_ruta = None
+        self.alerta = None
         self._abrir()
         threading.Thread(target=self._bucle, daemon=True).start()
 
@@ -104,7 +107,8 @@ class Capturador:
                     if (frame.shape[1], frame.shape[0]) != self._tam_writer:
                         frame = cv2.resize(frame, self._tam_writer)
                     self._writer.write(frame)
-                    self._cuadros += 1
+                    self._seg_cuadros += 1
+                    self._al_escribir()
             if demo:
                 time.sleep(max(0, periodo - (time.time() - ini)))
 
@@ -132,73 +136,137 @@ class Capturador:
         ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, calidad])
         return buf.tobytes() if ok else None
 
-    # ---------- fotos ----------
+    # ---------- fotos (se escriben, se sincronizan al disco y se vuelven a leer) ----------
     def foto(self, ruta):
+        """Guarda la foto y comprueba que quedó bien en el disco. Devuelve True/False."""
         self.esperar_cuadro()
         f = self.cuadro()
         if f is None:
             return False
-        return cv2.imwrite(ruta, f, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        ok, buf = cv2.imencode(".jpg", f, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            return False
+        try:
+            escribir_seguro(ruta, buf.tobytes())
+            return verificar_imagen(ruta, f.shape)
+        except OSError:
+            log.exception("No se pudo guardar la foto %s", ruta)
+            return False
 
-    # ---------- grabación (un solo archivo, con pausas) ----------
+    # ---------- grabación en segmentos de 30 s ----------
+    # Cada segmento es un archivo independiente que se cierra y se sincroniza al disco: si se
+    # va la luz o se cierra el programa, se pierden como máximo los últimos segundos. Nunca se
+    # sobrescribe un segmento existente.
+    SEGMENTO_S = 30
+    MIN_LIBRE_GB = 1.0
+
+    def _preparar_estudio(self, carpeta):
+        if carpeta != getattr(self, "_carpeta", None):
+            self._carpeta = carpeta
+            self._t_previo = sum(p.get("segundos", 0) for p in leer_manifiesto(carpeta))
+            self.alerta = None
+
+    def _abrir_segmento(self):
+        f = self._frame
+        h, w = f.shape[:2]
+        d = os.path.join(self._carpeta, DIR_PARTES)
+        os.makedirs(d, exist_ok=True)
+        n = siguiente_parte(d)
+        ruta = os.path.join(d, f"parte_{n:04d}.avi")
+        open(ruta, "wb").close()  # existe antes de abrirlo (permite ruta corta en Windows)
+        wr = cv2.VideoWriter(ruta_para_opencv(ruta), cv2.VideoWriter_fourcc(*"MJPG"), self.fps, (w, h))
+        if not wr.isOpened():
+            log.error("No se pudo abrir el archivo de video %s", ruta)
+            self.alerta = "No se pudo crear el archivo de video. NO se está grabando."
+            return False
+        self._writer, self._seg_ruta, self._tam_writer = wr, ruta, (w, h)
+        self._seg_inicio, self._seg_cuadros = time.time(), 0
+        return True
+
+    def _cerrar_segmento(self):
+        if self._writer is None:
+            return
+        self._writer.release()
+        self._writer = None
+        dur = time.time() - self._seg_inicio
+        try:
+            sincronizar_disco(self._seg_ruta)
+            tam = os.path.getsize(self._seg_ruta)
+        except OSError:
+            tam = 0
+        if tam == 0 or self._seg_cuadros == 0:
+            log.error("Segmento vacío: %s", self._seg_ruta)
+            if self._seg_cuadros:
+                self.alerta = "Un segmento de video no se guardó correctamente."
+        agregar_al_manifiesto(self._carpeta, {
+            "archivo": os.path.basename(self._seg_ruta), "cuadros": self._seg_cuadros,
+            "segundos": round(dur, 3), "fps": round(self._seg_cuadros / dur, 3) if dur > 0 else self.fps,
+            "bytes": tam})
+        self._t_previo += dur
+
     def iniciar_grabacion(self, carpeta):
         self.esperar_cuadro()
         with self._lock:
-            grabando = self._grabando
-        return True if grabando else self.alternar_grabacion(carpeta)
+            if self._grabando and carpeta != self._carpeta:  # otro estudio: cerrar el anterior a salvo
+                self._cerrar_segmento()
+                self._grabando = False
+            self._preparar_estudio(carpeta)
+            if self._grabando:
+                return True
+            if self._frame is None:
+                self.alerta = "No hay señal de video."
+                return False
+            if espacio_libre_gb(carpeta) < self.MIN_LIBRE_GB:
+                self.alerta = "No hay espacio en el disco para grabar."
+                return False
+            self.alerta = None
+            self._grabando = self._abrir_segmento()
+            return self._grabando
 
     def detener_grabacion(self):
-        """Detiene (pausa) la grabación. Si se vuelve a iniciar, continúa en el mismo video."""
         with self._lock:
             if self._grabando:
-                self._t_grabado += time.time() - self._t_inicio_tramo
+                self._cerrar_segmento()
                 self._grabando = False
             return False
 
     def alternar_grabacion(self, carpeta):
-        self.esperar_cuadro()
         with self._lock:
-            if self._writer is None:
-                f = self._frame
-                if f is None:
-                    return False
-                h, w = f.shape[:2]
-                usar_mjpg = ruta_ffmpeg() is not None
-                ext, cc = (".avi", "MJPG") if usar_mjpg else (".mp4", "mp4v")
-                self._archivo_crudo = os.path.join(carpeta, "video_crudo" + ext)
-                self._writer = cv2.VideoWriter(
-                    self._archivo_crudo, cv2.VideoWriter_fourcc(*cc), self.fps, (w, h))
-                self._tam_writer = (w, h)
-                self._cuadros = 0
-                self._t_grabado = 0.0
-            if self._grabando:  # pausar
-                self._t_grabado += time.time() - self._t_inicio_tramo
+            grabando = self._grabando
+        return self.detener_grabacion() if grabando else self.iniciar_grabacion(carpeta)
+
+    def _al_escribir(self):
+        """Se llama con el candado tomado después de escribir cada cuadro."""
+        ahora = time.time()
+        if ahora - self._seg_inicio >= self.SEGMENTO_S:
+            self._cerrar_segmento()
+            if espacio_libre_gb(self._carpeta) < self.MIN_LIBRE_GB:
                 self._grabando = False
-            else:  # grabar / reanudar
-                self._t_inicio_tramo = time.time()
-                self._grabando = True
-            return self._grabando
+                self.alerta = "Se detuvo la grabación porque el disco está casi lleno. Lo grabado está a salvo."
+                log.error("Grabación detenida por falta de espacio")
+                return
+            if not self._abrir_segmento():
+                self._grabando = False
 
     def estado(self):
         with self._lock:
-            seg = self._t_grabado + (
-                time.time() - self._t_inicio_tramo if self._grabando else 0)
+            carpeta = getattr(self, "_carpeta", None)
+            previo = getattr(self, "_t_previo", 0.0)
+            seg = previo + (time.time() - self._seg_inicio if self._grabando and self._writer else 0)
             return {"grabando": self._grabando, "segundos": round(seg),
-                    "hay_video": self._writer is not None, "demo": self.demo,
-                    "camara": self.indice}
+                    "hay_video": seg > 0 or self._grabando, "demo": self.demo,
+                    "camara": self.indice, "alerta": getattr(self, "alerta", None),
+                    "libre_gb": round(espacio_libre_gb(carpeta), 1) if carpeta else None}
 
     def detener(self):
-        """Cierra el archivo. Devuelve (ruta_cruda, fps_real) o (None, None)."""
+        """Termina la grabación del estudio actual (cierra el segmento abierto)."""
         with self._lock:
-            if self._writer is None:
-                return None, None
             if self._grabando:
-                self._t_grabado += time.time() - self._t_inicio_tramo
+                self._cerrar_segmento()
             self._grabando = False
-            self._writer.release()
-            self._writer = None
-            fps_real = self._cuadros / self._t_grabado if self._t_grabado > 0 else self.fps
-            return self._archivo_crudo, fps_real
+            carpeta = getattr(self, "_carpeta", None)
+            self._carpeta, self._t_previo, self.alerta = None, 0.0, None
+            return carpeta
 
     def cerrar(self):
         self._activo = False
@@ -356,6 +424,148 @@ def listar_dispositivos(actual=None, maximo=8):
         vistos[n] = vistos.get(n, 0) + 1
         res.append({"indice": i, "nombre": n if vistos[n] == 1 else f"{n} ({vistos[n]})"})
     return res
+
+
+# ---------------- utilidades de guardado seguro ----------------
+DIR_PARTES = "video_partes"
+MANIFIESTO = "segmentos.json"
+
+
+def sincronizar_disco(ruta):
+    """Obliga a Windows a escribir el archivo en el disco (no dejarlo en memoria)."""
+    with open(ruta, "rb+") as f:
+        os.fsync(f.fileno())
+
+
+def escribir_seguro(ruta, datos):
+    tmp = ruta + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(datos)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, ruta)
+
+
+def verificar_imagen(ruta, forma=None):
+    try:
+        img = cv2.imdecode(np.fromfile(ruta, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return False
+    return img is not None and (forma is None or img.shape[:2] == tuple(forma[:2]))
+
+
+def espacio_libre_gb(ruta):
+    try:
+        return shutil.disk_usage(ruta).free / 1024 ** 3
+    except OSError:
+        return 999.0
+
+
+def ruta_para_opencv(ruta):
+    """OpenCV en Windows no abre rutas con acentos o ñ: se usa la ruta corta (8.3)."""
+    if platform.system() != "Windows":
+        return ruta
+    try:
+        ruta.encode("ascii")
+        return ruta
+    except UnicodeEncodeError:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(ruta, buf, 1024):
+            return buf.value
+        return ruta
+
+
+def siguiente_parte(d):
+    nums = [int(n[6:10]) for n in os.listdir(d) if re.match(r"parte_\d{4}\.avi$", n)]
+    return max(nums, default=0) + 1
+
+
+def leer_manifiesto(carpeta):
+    try:
+        with open(os.path.join(carpeta, DIR_PARTES, MANIFIESTO), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return []
+
+
+def agregar_al_manifiesto(carpeta, entrada):
+    m = leer_manifiesto(carpeta) + [entrada]
+    escribir_seguro(os.path.join(carpeta, DIR_PARTES, MANIFIESTO),
+                    json.dumps(m, ensure_ascii=False, indent=1).encode("utf-8"))
+
+
+def duracion_video(ruta):
+    """Duración en segundos según ffmpeg (None si no se puede leer)."""
+    t = _salida_ffmpeg(["-i", ruta]) or ""
+    m = re.search(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", t)
+    if not m:
+        return None
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
+def hay_segmentos(carpeta):
+    d = os.path.join(carpeta, DIR_PARTES)
+    return os.path.isdir(d) and any(n.endswith(".avi") for n in os.listdir(d))
+
+
+def unir_y_verificar(carpeta, destino, fps_defecto=30):
+    """Convierte cada segmento a MP4, los une en un solo video y verifica que la duración final
+    coincida con lo grabado. Solo si todo cuadra se borran los segmentos originales.
+    Devuelve {ok, duracion, esperado, problemas}."""
+    ff = ruta_ffmpeg()
+    d = os.path.join(carpeta, DIR_PARTES)
+    man = {p["archivo"]: p for p in leer_manifiesto(carpeta)}
+    partes = sorted(n for n in os.listdir(d) if re.match(r"parte_\d{4}\.avi$", n))
+    tmp = os.path.join(d, "mp4")
+    os.makedirs(tmp, exist_ok=True)
+    listos, problemas, esperado = [], [], 0.0
+    for n in partes:
+        info = man.get(n)
+        if info and info.get("cuadros", 0) == 0:
+            continue
+        fps = (info or {}).get("fps") or fps_defecto
+        esperado += (info or {}).get("segundos") or 0
+        salida = os.path.join(tmp, n.replace(".avi", ".mp4"))
+        if not (os.path.exists(salida) and duracion_video(salida)):
+            r = subprocess.run([ff, "-y", "-loglevel", "error", "-err_detect", "ignore_err",
+                                "-r", f"{fps:.3f}", "-i", os.path.join(d, n), "-c:v", "libx264",
+                                "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", salida],
+                               capture_output=True, text=True, **_sin_ventana())
+            if r.returncode != 0 or not duracion_video(salida):
+                problemas.append(f"El pedazo {int(n[6:10])} del video está dañado y no se pudo leer "
+                                 f"(los demás se conservaron).")
+                log.error("No se pudo convertir %s: %s", n, r.stderr[-400:])
+                continue
+        if not info:  # segmento de un cierre inesperado: se usa su duración real
+            esperado += duracion_video(salida) or 0
+        listos.append(salida)
+    if not listos:
+        return {"ok": False, "duracion": 0, "esperado": esperado,
+                "problemas": problemas or ["No hay segmentos de video que se puedan leer."]}
+    lista = os.path.join(tmp, "lista.txt")
+    with open(lista, "w", encoding="utf-8") as f:
+        for p in listos:
+            f.write("file '" + p.replace("\\", "/").replace("'", "'\\''") + "'\n")
+    final_tmp = destino + ".tmp.mp4"
+    r = subprocess.run([ff, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", lista,
+                        "-c", "copy", "-movflags", "+faststart", final_tmp],
+                       capture_output=True, text=True, **_sin_ventana())
+    dur = duracion_video(final_tmp) if r.returncode == 0 and os.path.exists(final_tmp) else None
+    suma = sum(duracion_video(p) or 0 for p in listos)
+    ok = bool(dur) and abs(dur - suma) <= max(1.5, 0.02 * suma) and \
+        (esperado == 0 or abs(dur - esperado) <= max(3.0, 0.10 * esperado)) and not problemas
+    if not dur:
+        problemas.append("No se pudo unir el video.")
+        log.error("No se pudo unir el video: %s", r.stderr[-400:])
+    elif not ok and not problemas:
+        problemas.append(f"La duración no coincide (video {dur:.0f} s, grabado {esperado:.0f} s).")
+    if dur:
+        sincronizar_disco(final_tmp)
+        os.replace(final_tmp, destino)
+    if ok:  # todo verificado: ya se pueden borrar los segmentos originales
+        shutil.rmtree(d, ignore_errors=True)
+    return {"ok": ok, "duracion": round(dur or 0, 1), "esperado": round(esperado, 1), "problemas": problemas}
 
 
 def convertir_h264(crudo, destino, fps_real):

@@ -25,7 +25,8 @@ import almacen as A
 import nube
 from version import VERSION, VISOR
 import reporte
-from captura import Capturador, convertir_h264, listar_dispositivos
+from captura import (Capturador, convertir_h264, espacio_libre_gb, hay_segmentos, listar_dispositivos,
+                     sincronizar_disco, unir_y_verificar, verificar_imagen)
 
 A.iniciar()
 CFG = A.config()
@@ -500,14 +501,17 @@ def usuario_accion(u):
 @requiere_login
 def inicio():
     activo = session.get("estudio")
-    if activo and A.leer_estudio(activo) and A.leer_estudio(activo)["estado"] == "capturando":
+    if activo and A.leer_estudio(activo) and A.leer_estudio(activo)["estado"] == "capturando" \
+            and request.args.get("ver") != "1":
         return redirect(url_for("captura"))
     u = session["usuario"]
     estudios = A.listar_estudios(None if A.es_admin(u) else u)[:40]
     nombres = {x["usuario"]: x["nombre"] for x in A.lista_medicos()}
     for e in estudios:
         e["medico_nombre"] = nombres.get(e["usuario"], e["usuario"])
-    return render_template("inicio.html", estudios=estudios, ver_todos=A.es_admin(u))
+    sin_terminar = [e for e in A.listar_estudios(u) if e["estado"] == "capturando"]
+    return render_template("inicio.html", estudios=estudios, ver_todos=A.es_admin(u),
+                           sin_terminar=sin_terminar, libre_gb=round(espacio_libre_gb(A.DATOS), 1))
 
 
 @app.route("/iniciar", methods=["POST"])
@@ -518,7 +522,13 @@ def iniciar():
     if not nombre or not edad.isdigit() or proc not in A.PROCEDIMIENTOS:
         flash("Escriba el nombre completo, la edad (en años) y el procedimiento.")
         return redirect(url_for("inicio"))
+    libre = espacio_libre_gb(A.DATOS)
+    if libre < 3:
+        flash(f"No se puede iniciar: quedan solo {libre:.1f} GB libres en el disco. Libere espacio "
+              "(o mueva estudios ya subidos a Drive) para no arriesgar la grabación.")
+        return redirect(url_for("inicio"))
     nombre_proc = f.get("otro", "").strip() if proc == "OTR" and f.get("otro") else A.PROCEDIMIENTOS[proc]
+    camara().detener()  # si quedó grabando otro estudio, se cierra a salvo
     codigo = A.nuevo_codigo(proc)
     os.makedirs(os.path.join(A.carpeta(codigo), "fotos"), exist_ok=True)
     A.guardar_estudio({
@@ -551,7 +561,9 @@ def cancelar():
     if codigo:
         mi_estudio(codigo)
         camara().detener()
-        shutil.rmtree(A.carpeta(codigo), ignore_errors=True)
+        A.a_papelera(codigo)
+        log.info("Estudio %s cancelado y movido a la papelera", codigo)
+        flash("El estudio se canceló y se guardó en la papelera por 30 días (carpeta de datos → papelera).", "ok")
     return redirect(url_for("inicio"))
 
 
@@ -582,28 +594,56 @@ def _estudio_activo():
 @requiere_login
 def api_foto():
     e = _estudio_activo()
-    nombre = f"foto_{len(e['fotos']) + 1:03d}_{datetime.now():%H%M%S}.jpg"
-    if not camara().foto(os.path.join(A.carpeta(e["codigo"]), "fotos", nombre)):
-        return jsonify(error="Sin señal de video"), 500
+    n = len(e["fotos"]) + 1
+    nombre = f"foto_{n:03d}_{datetime.now():%H%M%S%f}"[:-3] + ".jpg"
+    ruta = os.path.join(A.carpeta(e["codigo"]), "fotos", nombre)
+    if not camara().foto(ruta):
+        log.error("Foto NO guardada: %s", ruta)
+        return jsonify(error="La foto NO se pudo guardar en la computadora. Intente de nuevo."), 500
     usados = {f.get("orden") for f in e["fotos"]}
-    libre = next((n for n in range(1, 9) if n not in usados), None)
+    libre = next((k for k in range(1, 9) if k not in usados), None)
     e["fotos"].append({"archivo": nombre, "incluir": libre is not None, "orden": libre, "nota": ""})
     A.guardar_estudio(e)
-    return jsonify(archivo=nombre, orden=libre,
+    return jsonify(archivo=nombre, orden=libre, guardada=True, numero=n,
                    url=url_for("archivo", codigo=e["codigo"], ruta="fotos/" + nombre))
 
 
 @app.route("/api/foto/<archivo>", methods=["DELETE"])
 @requiere_login
 def api_borrar_foto(archivo):
+    """No se borra: se aparta a «fotos_borradas» dentro del estudio."""
     e = _estudio_activo()
     e["fotos"] = [f for f in e["fotos"] if f["archivo"] != archivo]
     A.guardar_estudio(e)
-    try:
-        os.remove(os.path.join(A.carpeta(e["codigo"]), "fotos", os.path.basename(archivo)))
-    except OSError:
-        pass
+    origen = os.path.join(A.carpeta(e["codigo"]), "fotos", os.path.basename(archivo))
+    if os.path.exists(origen):
+        apartadas = os.path.join(A.carpeta(e["codigo"]), "fotos_borradas")
+        os.makedirs(apartadas, exist_ok=True)
+        shutil.move(origen, os.path.join(apartadas, os.path.basename(archivo)))
     return jsonify(ok=True)
+
+
+@app.route("/api/borrador", methods=["POST"])
+@requiere_login
+def api_borrador():
+    """Guarda en el disco lo escrito y la selección de fotos mientras se trabaja."""
+    e = _estudio_activo()
+    _aplicar_formulario(e, request.get_json(force=True))
+    A.guardar_estudio(e)
+    return jsonify(ok=True, hora=datetime.now().strftime("%H:%M:%S"))
+
+
+def _aplicar_formulario(e, d):
+    for k in ("hallazgos", "diagnostico", "recomendaciones"):
+        if k in d:
+            e[k] = (d.get(k) or "").strip()
+    sel = {f["archivo"]: f for f in d.get("fotos", [])}
+    for f in e["fotos"]:
+        if f["archivo"] in sel:
+            orden = sel[f["archivo"]].get("orden")
+            f["orden"] = int(orden) if orden and 1 <= int(orden) <= 8 else None
+            f["incluir"] = f["orden"] is not None
+            f["nota"] = (sel[f["archivo"]].get("nota") or "").strip()[:120]
 
 
 @app.route("/api/grabar", methods=["POST"])
@@ -686,25 +726,24 @@ def api_estado():
 @requiere_login
 def api_finalizar():
     e = _estudio_activo()
-    d = request.get_json(force=True)
-    for k in ("hallazgos", "diagnostico", "recomendaciones"):
-        e[k] = d.get(k, "").strip()
-    sel = {f["archivo"]: f for f in d.get("fotos", [])}
-    for f in e["fotos"]:
-        if f["archivo"] in sel:
-            orden = sel[f["archivo"]].get("orden")
-            f["orden"] = int(orden) if orden and 1 <= int(orden) <= 8 else None
-            f["incluir"] = f["orden"] is not None
-            f["nota"] = sel[f["archivo"]].get("nota", "").strip()[:120]
-    crudo, fps = camara().detener()
-    e["video_crudo"] = os.path.basename(crudo) if crudo else None
-    e["fps_real"] = fps
+    _aplicar_formulario(e, request.get_json(force=True))
+    camara().detener()
     e["fin"] = datetime.now().isoformat(timespec="seconds")
     e["estado"] = "procesando"
     A.guardar_estudio(e)
     session.pop("estudio", None)
     lanzar(e["codigo"])
     return jsonify(url=url_for("estudio", codigo=e["codigo"]))
+
+
+@app.route("/retomar/<codigo>", methods=["POST"])
+@requiere_login
+def retomar(codigo):
+    e = mi_estudio(codigo)
+    if e["estado"] == "capturando":
+        session["estudio"] = codigo
+        return redirect(url_for("captura"))
+    return redirect(url_for("inicio"))
 
 
 # ---------------- procesamiento (local, inmediato) ----------------
@@ -734,8 +773,34 @@ def _enlace(id_drive):
     return f"{pagina}?e={id_drive}"
 
 
+def verificar_local(e):
+    """Comprueba en el disco que todo el estudio quedó guardado. Devuelve (ok, detalle, problemas)."""
+    carp, problemas = A.carpeta(e["codigo"]), []
+    pdf = os.path.join(carp, "reporte.pdf")
+    if not (os.path.exists(pdf) and os.path.getsize(pdf) > 1000):
+        problemas.append("El reporte PDF no se guardó.")
+    fotos_ok = 0
+    for f in e["fotos"]:
+        r = os.path.join(carp, "fotos", f["archivo"])
+        if verificar_imagen(r):
+            fotos_ok += 1
+        else:
+            problemas.append(f"La foto {f['archivo']} no se puede leer.")
+    video = os.path.join(carp, "video.mp4")
+    v = e.get("video_verificacion")
+    if v and not v.get("ok"):
+        problemas += v.get("problemas") or ["El video no pasó la verificación."]
+    detalle = {"pdf": os.path.exists(pdf), "fotos": fotos_ok, "fotos_total": len(e["fotos"]),
+               "video": os.path.exists(video),
+               "video_segundos": (v or {}).get("duracion") if v else None,
+               "video_mb": round(os.path.getsize(video) / 1024 ** 2, 1) if os.path.exists(video) else 0,
+               "carpeta": carp, "verificado": datetime.now().isoformat(timespec="seconds")}
+    return not problemas, detalle, problemas
+
+
 def procesar(codigo):
-    """Todo lo que se hace sin internet: video, QR y PDF. La subida la hace el sincronizador."""
+    """Todo lo que se hace sin internet: video, QR, PDF y verificación. La subida la hace el
+    sincronizador. Nada original se borra si algo no cuadra."""
     carp = A.carpeta(codigo)
     e = A.leer_estudio(codigo)
 
@@ -747,7 +812,12 @@ def procesar(codigo):
     try:
         e.pop("error", None)
         video = os.path.join(carp, "video.mp4")
-        if e.get("video_crudo") and not os.path.exists(video):
+        if hay_segmentos(carp):
+            paso("Uniendo y verificando el video…")
+            r = unir_y_verificar(carp, video, CFG["fps"])
+            e["video_verificacion"] = r
+            log.info("Video %s: %s", codigo, r)
+        elif e.get("video_crudo") and not os.path.exists(video):  # estudios de versiones anteriores
             paso("Preparando el video…")
             convertir_h264(os.path.join(carp, e["video_crudo"]), video, e.get("fps_real") or 30)
 
@@ -760,16 +830,28 @@ def procesar(codigo):
 
         paso("Generando el reporte…")
         _generar_pdf(e)
+        sincronizar_disco(os.path.join(carp, "reporte.pdf"))
+
+        paso("Verificando que todo quedó guardado…")
+        ok, detalle, problemas = verificar_local(e)
+        e["local"] = {"ok": ok, **detalle, "problemas": problemas}
+        if not ok:
+            log.error("Verificación local FALLÓ en %s: %s", codigo, problemas)
+            paso("Atención: " + " ".join(problemas), estado="error", reporte=True,
+                 error="Los archivos originales se conservaron. " + " ".join(problemas))
+            return
+        log.info("Estudio %s guardado y verificado: %s", codigo, detalle)
         if usar_drive:
             e["sync"] = e.get("sync") if e.get("sync") == "subido" else "pendiente"
-            texto = "Reporte listo. Se subirá a Google Drive en cuanto haya internet."
+            texto = "Guardado y verificado en esta computadora. Se subirá a Google Drive en cuanto haya internet."
         else:
             e["sync"] = "sin_drive"
-            texto = "Reporte listo (guardado en esta computadora; su Google Drive no está conectado)."
+            texto = "Guardado y verificado en esta computadora (su Google Drive no está conectado)."
         paso(texto, estado="listo", reporte=True)
         avisar_sincronizador()
     except Exception as ex:
-        paso("Error", estado="error", error=str(ex)[:500])
+        log.exception("Error al procesar %s", codigo)
+        paso("Error", estado="error", error=str(ex)[:500] + " — Los archivos originales se conservaron.")
     finally:
         with _lock_trab:
             _trabajos.discard(codigo)
@@ -1024,7 +1106,7 @@ def datos_abrir():
 def api_trabajo(codigo):
     e = mi_estudio(codigo)
     r = {k: e.get(k) for k in ("estado", "paso", "enlace", "carpeta_url", "reporte", "subido",
-                               "error", "sync", "sync_error", "qr_actualizado")}
+                               "error", "sync", "sync_error", "qr_actualizado", "local")}
     r["pct"] = _sync["pct"] if _sync["actual"] == codigo else None
     r["en_linea"] = _sync["en_linea"]
     return jsonify(r)
@@ -1054,6 +1136,10 @@ def archivo(codigo, ruta):
 def mantenimiento():
     time.sleep(2)
     threading.Thread(target=actualizador.buscar, daemon=True).start()
+    try:
+        A.vaciar_papelera(30)
+    except Exception:
+        log.exception("No se pudo vaciar la papelera")
     admins = [u for u in A.medicos() if A.es_admin(u)]
     nube.migrar_token_global(admins[0] if admins else None)
     for u in A.medicos():  # vincular la cuenta de Google de quien ya tenía Drive conectado
