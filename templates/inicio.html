@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block contenido %}
+{% if not drive_listo %}
+  <div class="aviso">Google Drive aún no está conectado: el estudio se guardará solo en esta computadora
+    y el reporte saldrá sin QR. <a href="{{ url_for('drive') }}">Iniciar sesión con Google</a></div>
+{% endif %}
+<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;margin-bottom:28px" class="inicio-grid">
+<div class="tarjeta" style="padding:14px">
+  <h2 style="margin:4px 4px 10px">Señal de la capturadora</h2>
+  <div style="background:#000;border-radius:8px;overflow:hidden;aspect-ratio:16/9">
+    <img src="{{ url_for('video_feed') }}" alt="Señal de video" style="width:100%;height:100%;object-fit:contain;display:block">
+  </div>
+  <div style="margin:12px 4px 0">{% include "_fuente.html" %}</div>
+  <p class="sub" style="margin:8px 4px 0;font-size:13px">Elija la capturadora del endoscopio y confirme que ve su imagen antes de iniciar.</p>
+</div>
+<div class="tarjeta">
+  <h1>Iniciar procedimiento</h1>
+  <p class="sub">Datos del paciente para el reporte.</p>
+  <form method="post" action="{{ url_for('iniciar') }}" autocomplete="off">
+    <label for="p">Nombre completo del paciente</label>
+    <input id="p" name="paciente" required autofocus>
+    <div class="fila">
+      <div>
+        <label for="ed">Edad (años)</label>
+        <input id="ed" name="edad" type="number" min="0" max="120" required>
+      </div>
+      <div>
+        <label for="pr">Procedimiento a realizar</label>
+        <select id="pr" name="proc" required onchange="otro.hidden = this.value !== 'OTR'">
+          <option value="" disabled selected>Seleccione…</option>
+          {% for k, v in procedimientos.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div id="otro" hidden>
+      <label>¿Cuál procedimiento?</label>
+      <input name="otro">
+    </div>
+    {% if cfg.drive.compartir == 'restringido' %}
+      <label>Correo Gmail del paciente (para darle acceso al video)</label>
+      <input name="correo" type="email">
+    {% endif %}
+    <button class="btn ancho" style="margin-top:22px">Iniciar procedimiento →</button>
+  </form>
+</div>
+</div>
+<style>@media (max-width:860px){.inicio-grid{grid-template-columns:1fr !important}}</style>
+
+<div class="tarjeta">
+  <h2>Estudios recientes</h2>
+  {% if estudios %}
+  <table class="lista">
+    <tr><th>Fecha</th><th>Paciente</th><th>Procedimiento</th><th>Estado</th><th></th></tr>
+    {% for e in estudios %}
+    <tr>
+      <td>{{ e.inicio[:10] }}</td>
+      <td>{{ e.paciente }}</td>
+      <td>{{ e.procedimiento }}</td>
+      <td><span class="chip {{ e.estado }}">{{ {'listo':'Listo','error':'Error','procesando':'Procesando','capturando':'En curso'}[e.estado] }}</span></td>
+      <td style="text-align:right">
+        {% if e.estado != 'capturando' %}<a href="{{ url_for('estudio', codigo=e.codigo) }}">Abrir</a>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+    <p class="sub" style="margin:0">Aún no hay estudios.</p>
+  {% endif %}
+</div>
+{% endblock %}

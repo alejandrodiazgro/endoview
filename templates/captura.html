@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block titulo %}Captura · {{ e.codigo }}{% endblock %}
+{% block clase_body %}oscuro{% endblock %}
+{% block css %}
+  body.oscuro{background:#0F1419;color:#E6EBF0}
+  body.oscuro main{max-width:1400px;margin:0 auto;padding:0 18px 30px}
+  .paciente{display:flex;align-items:center;gap:18px;flex-wrap:wrap;padding:12px 0}
+  .paciente b{font-size:17px;color:#fff}
+  .paciente .meta{color:#8A96A3;font-size:14px}
+  .tabs{display:flex;gap:4px;margin-left:auto}
+  .tab{background:#1A222B;color:#9AA6B2;border:1px solid #26313C;border-bottom:0;padding:10px 18px;border-radius:8px 8px 0 0;
+       font:600 14px system-ui;cursor:pointer}
+  .tab.activa{background:#161D25;color:#fff;border-color:#2E6DA4}
+  .tab .n{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:10px;background:#2E6DA4;color:#fff;font-size:12px}
+  .hoja{background:#161D25;border:1px solid #26313C;border-radius:0 0 10px 10px;padding:16px}
+  .hoja[hidden]{display:none}
+
+  /* Captura */
+  .video{position:relative;background:#000;border-radius:8px;overflow:hidden;aspect-ratio:16/9;max-height:70vh;margin:0 auto}
+  .video img{width:100%;height:100%;object-fit:contain;display:block}
+  .insignia{position:absolute;top:14px;display:none;align-items:center;gap:8px;background:rgba(0,0,0,.65);
+       padding:6px 12px;border-radius:20px;font:700 15px ui-monospace,monospace;color:#fff}
+  #rec{left:14px} #rec i{width:12px;height:12px;border-radius:50%;background:#E53935;animation:lat 1s infinite}
+  #rec.pausa i{background:#8A96A3;animation:none}
+  #demo{right:14px;background:rgba(198,40,40,.85);font:600 13px system-ui}
+  @keyframes lat{50%{opacity:.25}}
+  .destello{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s}
+  .controles{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:14px 0 10px}
+  .controles .btn{padding:18px;font-size:18px}
+  .controles .btn:disabled{opacity:.35;cursor:not-allowed}
+  .b-ini{background:#C62828} .b-ini:hover{background:#D84040}
+  .b-foto{background:#2E6DA4}
+  .b-det{background:#37424E} .b-det:hover{background:#4A5866}
+  .linea-inf{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;color:#8A96A3;font-size:13px}
+  .fuente select{background:#0F1419;border-color:#2C3743;color:#E6EBF0}
+  .fuente-et{color:#8A96A3}
+  .fuente button{background:#1A222B;border-color:#2C3743;color:#C9D3DD}
+  kbd{background:#25303B;border:1px solid #3A4754;border-radius:4px;padding:1px 6px;font-size:12px;color:#DDE3E9}
+  .tira{display:flex;gap:8px;overflow-x:auto;margin-top:12px;padding-bottom:4px}
+  .tira img{height:64px;border-radius:5px;border:2px solid transparent}
+  .tira img.sel{border-color:#4C9BE0}
+
+  /* Revisión */
+  h3{margin:4px 0 10px;font-size:15px;color:#fff}
+  .ayuda{color:#8A96A3;font-size:13px;margin:-4px 0 12px}
+  .todas{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+  .mini{position:relative;border:3px solid transparent;border-radius:7px;overflow:hidden;cursor:pointer;background:#000}
+  .mini img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
+  .mini.sel{border-color:#4C9BE0}
+  .mini .num{position:absolute;top:5px;left:5px;background:#2E6DA4;color:#fff;font:700 13px system-ui;
+       width:24px;height:24px;border-radius:50%;display:none;align-items:center;justify-content:center}
+  .mini.sel .num{display:flex}
+  .mini .borrar{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.6);border:0;color:#fff;border-radius:5px;
+       cursor:pointer;padding:2px 6px;font-size:13px;display:none}
+  .mini:hover .borrar{display:block}
+  .vacio{color:#8A96A3;padding:20px;text-align:center;border:1px dashed #2C3743;border-radius:8px}
+
+  .reporte{background:#fff;color:#1C2430;border-radius:8px;padding:22px 26px;margin-top:22px}
+  .reporte h3{color:#1F4E79}
+  .reporte .ayuda{color:#5F6B76}
+  .rejilla{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .casilla{border:1.5px dashed #C9D3DD;border-radius:6px;min-height:60px;display:flex;flex-direction:column;background:#F7F9FB}
+  .casilla.llena{border:1px solid #D9E0E7;background:#fff}
+  .casilla .img{position:relative;aspect-ratio:16/9;background:#EEF1F4;display:flex;align-items:center;justify-content:center;
+       color:#9AA6B2;font-size:13px;border-radius:5px 5px 0 0;overflow:hidden}
+  .casilla .img img{width:100%;height:100%;object-fit:cover}
+  .casilla .img b{position:absolute;top:4px;left:4px;background:#1F4E79;color:#fff;font-size:11px;padding:1px 6px;border-radius:9px}
+  .casilla .acc{display:flex;gap:2px;padding:4px}
+  .casilla .acc button{flex:0 0 auto;border:1px solid #D9E0E7;background:#fff;border-radius:4px;cursor:pointer;font-size:12px;padding:2px 6px;color:#5F6B76}
+  .casilla .acc input{flex:1;min-width:0;padding:3px 6px;font-size:12px}
+  .reporte label{color:#5F6B76}
+  .reporte textarea{min-height:90px}
+  .fin{display:flex;gap:12px;margin-top:18px}
+  @media (max-width:800px){.rejilla{grid-template-columns:repeat(2,1fr)} .controles .btn{font-size:15px;padding:14px}}
+{% endblock %}
+{% block contenido %}
+<div class="paciente">
+  <b>{{ e.paciente }}</b>
+  <span class="meta">{{ e.edad }} años · {{ e.procedimiento }} · {{ e.codigo }}</span>
+  <div class="tabs">
+    <button class="tab activa" data-hoja="hCaptura">Captura</button>
+    <button class="tab" data-hoja="hRevision">Revisión de fotos <span class="n" id="nTotal">0</span></button>
+  </div>
+</div>
+
+<!-- ============ CAPTURA ============ -->
+<section class="hoja" id="hCaptura">
+  <div class="video">
+    <img src="{{ url_for('video_feed') }}" alt="Señal de la capturadora de video">
+    <div class="insignia" id="rec"><i></i><span id="tiempo">00:00</span></div>
+    <div class="insignia" id="demo">Sin capturadora · imagen de prueba</div>
+    <div class="destello" id="destello"></div>
+  </div>
+  <div class="controles">
+    <button class="btn b-ini" id="bIni">● Iniciar grabación</button>
+    <button class="btn b-foto" id="bFoto">📷 Tomar foto</button>
+    <button class="btn b-det" id="bDet" disabled>■ Detener grabación</button>
+  </div>
+  <div class="linea-inf">
+    <span>Foto: {% for k in cfg.teclas.foto %}<kbd>{{ 'Espacio' if k == ' ' else k }}</kbd> {% endfor %}
+      · Iniciar / detener: {% for k in cfg.teclas.grabar %}<kbd>{{ k }}</kbd> {% endfor %}
+      · Si detiene y vuelve a iniciar, se sigue grabando en el mismo video.</span>
+    <div style="min-width:360px;flex:0 1 460px">{% include "_fuente.html" %}</div>
+  </div>
+  <div class="tira" id="tira"></div>
+</section>
+
+<!-- ============ REVISIÓN ============ -->
+<section class="hoja" id="hRevision" hidden>
+  <h3>Fotos del estudio</h3>
+  <p class="ayuda">Toque una foto para agregarla o quitarla del reporte (máximo 8). El número indica su lugar.</p>
+  <div class="todas" id="todas"></div>
+
+  <div class="reporte">
+    <h3>Reporte</h3>
+    <p class="ayuda">Así quedarán las fotos en el reporte: dos hileras de 4. Use ◀ ▶ para cambiar el orden.</p>
+    <div class="rejilla" id="rejilla"></div>
+
+    <label for="hall">Hallazgos</label>
+    <textarea id="hall" rows="6"></textarea>
+    <label for="dx">Diagnóstico</label>
+    <textarea id="dx" rows="3"></textarea>
+    <label for="rec2">Recomendaciones</label>
+    <textarea id="rec2" rows="3"></textarea>
+
+    <div class="fin">
+      <button class="btn" id="bFin" style="flex:1;padding:14px">Finalizar y generar reporte</button>
+      <form method="post" action="{{ url_for('cancelar') }}"
+            onsubmit="if (!confirm('¿Cancelar el estudio? Se borrarán las fotos y el video.')) return false; window.saliendo = true;">
+        <button class="btn peligro" style="padding:14px">Cancelar estudio</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block js %}
+<script>
+const TECLAS = {{ cfg.teclas | tojson }};
+const fotos = {{ e.fotos | tojson }};
+const BASE_FOTO = "{{ url_for('archivo', codigo=e.codigo, ruta='fotos/') }}";
+const MAX = 8;
+const $ = s => document.querySelector(s);
+const url = f => BASE_FOTO + encodeURIComponent(f.archivo);
+let grabando = false;
+
+/* ---------- pestañas ---------- */
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('activa', x === t));
+  document.querySelectorAll('.hoja').forEach(h => h.hidden = h.id !== t.dataset.hoja);
+});
+
+/* ---------- selección de fotos ---------- */
+const elegidas = () => fotos.filter(f => f.orden).sort((a, b) => a.orden - b.orden);
+function compactar(){ elegidas().forEach((f, i) => f.orden = i + 1); }
+function alternar(f){
+  if (f.orden) { f.orden = null; compactar(); }
+  else {
+    const n = elegidas().length;
+    if (n >= MAX) return alert('Ya hay 8 fotos en el reporte. Quite una para agregar otra.');
+    f.orden = n + 1;
+  }
+  pintar();
+}
+function mover(f, d){
+  const lista = elegidas(), i = lista.indexOf(f), j = i + d;
+  if (j < 0 || j >= lista.length) return;
+  [lista[i].orden, lista[j].orden] = [lista[j].orden, lista[i].orden];
+  pintar();
+}
+async function borrar(f){
+  if (!confirm('¿Borrar esta foto?')) return;
+  await fetch('/api/foto/' + encodeURIComponent(f.archivo), {method:'DELETE'});
+  fotos.splice(fotos.indexOf(f), 1); compactar(); pintar();
+}
+
+function pintar(){
+  $('#nTotal').textContent = fotos.length;
+  // tira en la pestaña de captura (últimas 12)
+  $('#tira').innerHTML = fotos.slice(-12).reverse()
+    .map(f => `<img src="${url(f)}" class="${f.orden ? 'sel' : ''}" title="${f.orden ? 'En el reporte (#' + f.orden + ')' : ''}">`).join('');
+  // todas
+  const t = $('#todas'); t.innerHTML = '';
+  if (!fotos.length) t.innerHTML = '<div class="vacio" style="grid-column:1/-1">Aún no hay fotos. Tómelas en la pestaña Captura.</div>';
+  fotos.forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'mini' + (f.orden ? ' sel' : '');
+    d.innerHTML = `<img src="${url(f)}"><span class="num">${f.orden || ''}</span><button class="borrar" title="Borrar">🗑</button>`;
+    d.onclick = () => alternar(f);
+    d.querySelector('.borrar').onclick = ev => { ev.stopPropagation(); borrar(f); };
+    t.appendChild(d);
+  });
+  // rejilla del reporte 2 x 4
+  const r = $('#rejilla'); r.innerHTML = '';
+  const lista = elegidas();
+  for (let i = 0; i < MAX; i++) {
+    const f = lista[i], c = document.createElement('div');
+    if (!f) { c.className = 'casilla'; c.innerHTML = `<div class="img">Foto ${i + 1}</div>`; r.appendChild(c); continue; }
+    c.className = 'casilla llena';
+    c.innerHTML = `<div class="img"><img src="${url(f)}"><b>${i + 1}</b></div>
+      <div class="acc"><button title="Mover a la izquierda">◀</button><input placeholder="Nota" maxlength="120">
+      <button title="Mover a la derecha">▶</button><button title="Quitar del reporte">✕</button></div>`;
+    const [izq, der, quitar] = c.querySelectorAll('button');
+    const inp = c.querySelector('input'); inp.value = f.nota || ''; inp.oninput = () => f.nota = inp.value;
+    izq.onclick = () => mover(f, -1); der.onclick = () => mover(f, 1); quitar.onclick = () => alternar(f);
+    r.appendChild(c);
+  }
+}
+
+/* ---------- foto y grabación ---------- */
+async function tomarFoto(){
+  const de = $('#destello'); de.style.opacity = .7; setTimeout(() => de.style.opacity = 0, 120);
+  const j = await (await fetch('/api/foto', {method:'POST'})).json();
+  if (j.error) return alert(j.error);
+  fotos.push({archivo: j.archivo, orden: j.orden, nota: ''}); pintar();
+}
+function mostrarEstado(s){
+  grabando = s.grabando;
+  $('#rec').style.display = s.hay_video ? 'flex' : 'none';
+  $('#rec').classList.toggle('pausa', !s.grabando);
+  const m = String(Math.floor(s.segundos / 60)).padStart(2, '0'), sg = String(s.segundos % 60).padStart(2, '0');
+  $('#tiempo').textContent = (s.grabando ? 'REC ' : 'DETENIDO ') + m + ':' + sg;
+  $('#bIni').disabled = s.grabando;
+  $('#bDet').disabled = !s.grabando;
+  $('#bIni').textContent = s.hay_video && !s.grabando ? '● Reanudar grabación' : '● Iniciar grabación';
+  $('#demo').style.display = s.demo ? 'flex' : 'none';
+}
+const post = async ruta => mostrarEstado(await (await fetch(ruta, {method:'POST'})).json());
+$('#bIni').onclick = () => post('/api/grabar/iniciar');
+$('#bDet').onclick = () => post('/api/grabar/detener');
+$('#bFoto').onclick = tomarFoto;
+setInterval(async () => mostrarEstado(await (await fetch('/api/estado')).json()), 1000);
+
+document.addEventListener('keydown', ev => {
+  const escribiendo = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+  if ((escribiendo && !/^F\d+$/.test(ev.key)) || ev.repeat) return;
+  if (TECLAS.foto.includes(ev.key)) { ev.preventDefault(); tomarFoto(); }
+  else if (TECLAS.grabar.includes(ev.key)) { ev.preventDefault(); post(grabando ? '/api/grabar/detener' : '/api/grabar/iniciar'); }
+});
+
+/* ---------- fuente de video (lista en _fuente.html) ---------- */
+document.addEventListener('fuente-cambiada', ev => mostrarEstado(ev.detail));
+
+/* ---------- finalizar ---------- */
+$('#bFin').onclick = async () => {
+  if (grabando && !confirm('La grabación sigue activa. Se detendrá y se guardará el video. ¿Continuar?')) return;
+  if (!elegidas().length && !confirm('No eligió fotos para el reporte. ¿Finalizar de todos modos?')) return;
+  const b = $('#bFin'); b.disabled = true; b.textContent = 'Finalizando…'; window.saliendo = true;
+  const r = await fetch('/api/finalizar', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({hallazgos: $('#hall').value, diagnostico: $('#dx').value,
+                          recomendaciones: $('#rec2').value,
+                          fotos: fotos.map(f => ({archivo: f.archivo, orden: f.orden, nota: f.nota}))})});
+  location.href = (await r.json()).url;
+};
+window.addEventListener('beforeunload', ev => { if (!window.saliendo) ev.preventDefault(); });
+pintar();
+</script>
+{% endblock %}

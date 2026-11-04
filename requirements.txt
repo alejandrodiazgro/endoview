@@ -1,0 +1,8 @@
+flask>=3.0
+opencv-python>=4.9
+numpy
+reportlab>=4.0
+imageio-ffmpeg
+google-api-python-client
+google-auth-oauthlib
+pywebview>=5.0

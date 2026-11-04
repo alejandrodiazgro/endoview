@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block titulo %}Iniciar sesión · EndoView{% endblock %}
+{% block contenido %}
+<div class="tarjeta" style="max-width:400px;margin:60px auto">
+  <h1>EndoView</h1>
+  <p class="sub">Inicie sesión con su usuario de médico.</p>
+  <form method="post">
+    <label for="u">Usuario</label>
+    <input id="u" name="usuario" autocomplete="username" autofocus required>
+    <label for="c">Clave</label>
+    <input id="c" name="clave" type="password" autocomplete="current-password" required>
+    <button class="btn ancho" style="margin-top:20px">Entrar</button>
+  </form>
+</div>
+{% endblock %}

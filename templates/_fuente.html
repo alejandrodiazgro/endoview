@@ -1,0 +1,44 @@
+<div class="fuente">
+  <span class="fuente-et">Fuente de video</span>
+  <select id="selFuente" title="Dispositivo de imagen"><option>Buscando dispositivos…</option></select>
+  <button type="button" id="bBuscar" title="Volver a buscar dispositivos conectados">↻ Actualizar</button>
+</div>
+<script>
+(function () {
+  const sel = document.getElementById('selFuente'), btn = document.getElementById('bBuscar');
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  async function cargar() {
+    btn.disabled = sel.disabled = true;
+    sel.innerHTML = '<option>Buscando dispositivos…</option>';
+    try {
+      const j = await (await fetch("{{ url_for('api_camaras') }}")).json();
+      if (!j.dispositivos.length) {
+        sel.innerHTML = '<option value="" selected>No se encontraron dispositivos de imagen</option>';
+      } else {
+        sel.innerHTML = (j.actual === null ? '<option value="" selected disabled>— Elija la capturadora —</option>' : '')
+          + j.dispositivos.map(d => `<option value="${d.indice}" ${d.indice === j.actual ? 'selected' : ''}>${esc(d.nombre)}</option>`).join('');
+      }
+    } catch (e) {
+      sel.innerHTML = '<option value="" selected>No se pudo buscar dispositivos</option>';
+    }
+    btn.disabled = sel.disabled = false;
+  }
+
+  sel.onchange = async () => {
+    if (sel.value === '') return;
+    btn.disabled = sel.disabled = true;
+    let r;
+    try {
+      r = await (await fetch("{{ url_for('api_camara') }}", {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({indice: +sel.value})})).json();
+    } catch (e) { r = {error: 'No se pudo cambiar la fuente.'}; }
+    if (r.error) alert(r.error);
+    else if (!r.ok) alert('Ese dispositivo no da imagen. Revise que esté conectado y encendido, y que ningún otro programa (OBS, Zoom, etc.) lo esté usando.');
+    else document.dispatchEvent(new CustomEvent('fuente-cambiada', {detail: r}));
+    cargar();
+  };
+  btn.onclick = cargar;
+  cargar();
+})();
+</script>

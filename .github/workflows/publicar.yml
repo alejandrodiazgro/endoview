@@ -1,0 +1,79 @@
+name: Publicar versión de EndoView
+
+# Cada vez que cambia version.py en main, se compila el instalador de Windows y se publica
+# como versión nueva. EndoView la detecta y se actualiza solo en las computadoras.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Leer versión
+        id: v
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path version.py -Pattern 'VERSION = "(.+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+          gh release view "v$v" 2>$null
+          if ($LASTEXITCODE -eq 0) { "existe=1" >> $env:GITHUB_OUTPUT } else { "existe=0" >> $env:GITHUB_OUTPUT }
+          exit 0
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - uses: actions/setup-python@v5
+        if: steps.v.outputs.existe == '0'
+        with:
+          python-version: "3.12"
+
+      - name: Dependencias
+        if: steps.v.outputs.existe == '0'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Crear EndoView.exe
+        if: steps.v.outputs.existe == '0'
+        run: pyinstaller --noconfirm --clean EndoView.spec
+
+      - name: Prueba de arranque
+        if: steps.v.outputs.existe == '0'
+        shell: pwsh
+        run: |
+          $env:ENDO_DATOS = "$env:RUNNER_TEMP\endo"
+          $p = Start-Process dist\EndoView\EndoView.exe -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep 2
+            try { $r = Invoke-WebRequest http://127.0.0.1:5050/login -UseBasicParsing; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          Stop-Process $p -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "EndoView.exe no arrancó" }
+
+      - name: Crear instalador
+        if: steps.v.outputs.existe == '0'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DVersion=${{ steps.v.outputs.version }} instalador.iss
+          if ($LASTEXITCODE -ne 0) { throw "Falló Inno Setup" }
+          cd salida
+          Get-ChildItem *.exe | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_ -Algorithm SHA256).Hash.ToLower(), $_.Name } | Out-File -Encoding ascii SHA256SUMS.txt
+
+      - name: Publicar
+        if: steps.v.outputs.existe == '0'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = "${{ steps.v.outputs.version }}"
+          $notas = git log -1 --pretty=%B
+          gh release create "v$v" salida/EndoView-Setup-$v.exe salida/SHA256SUMS.txt --title "EndoView $v" --notes "$notas"

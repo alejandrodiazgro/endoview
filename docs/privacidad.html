@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aviso de privacidad · EndoView</title>
+<style>
+  body{margin:0;font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F5F8;color:#1C2430}
+  header{background:#1F4E79;color:#fff;padding:28px 20px} header h1{margin:0;font-size:24px}
+  main{max-width:760px;margin:0 auto;padding:24px 20px 48px} h2{font-size:18px;margin-top:28px} a{color:#1F4E79}
+</style>
+</head>
+<body>
+<header><h1>Aviso de privacidad de EndoView</h1></header>
+<main>
+  <p>EndoView es un programa que se instala en la computadora del médico. No tiene servidores propios:
+    no recibe, almacena ni comparte datos de médicos ni de pacientes.</p>
+
+  <h2>Datos en la computadora</h2>
+  <p>Los datos del médico (perfil, usuario y clave cifrada) y de los estudios (nombre y edad del paciente, fotos,
+    videos y reportes) se guardan únicamente en la computadora donde se instala EndoView.</p>
+
+  <h2>Uso de Google Drive</h2>
+  <p>Si el médico inicia sesión con Google, EndoView solicita el permiso <code>drive.file</code>, que solo le
+    permite ver y modificar los archivos y carpetas que el propio EndoView crea. EndoView no puede ver ningún
+    otro archivo del Drive del médico.</p>
+  <p>Con ese permiso, EndoView crea en el Drive del médico una carpeta por estudio con el reporte, las fotos
+    seleccionadas y el video, y la comparte en modo de solo lectura para que el paciente pueda consultarla
+    mediante el código QR de su reporte. El nombre de la carpeta y de los archivos usa un código de estudio,
+    no el nombre del paciente. El acceso del paciente se retira al terminar el plazo configurado por el médico
+    (90 días por defecto).</p>
+  <p>La información obtenida de las APIs de Google se usa exclusivamente para estas funciones, no se transfiere
+    a terceros y no se usa con fines publicitarios, en apego a la Política de Datos del Usuario de los Servicios
+    de las APIs de Google, incluidos los requisitos de uso limitado.</p>
+
+  <h2>Página del paciente</h2>
+  <p>La página que abre el código QR se ejecuta en el navegador del paciente y lee directamente de Google Drive
+    los archivos de su estudio. No guarda ni envía información a ningún otro lugar.</p>
+
+  <h2>Revocar el acceso</h2>
+  <p>El médico puede desconectar EndoView desde el propio programa o en
+    <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+
+  <h2>Contacto</h2>
+  <p>warrior55diaz@gmail.com</p>
+</main>
+</body>
+</html>

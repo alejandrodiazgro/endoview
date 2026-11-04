@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block titulo %}Estudio {{ e.codigo }}{% endblock %}
+{% block css %}
+  .cab{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+  .acciones{display:flex;gap:10px;flex-wrap:wrap}
+  .barra-p{height:8px;background:#E6ECF2;border-radius:6px;overflow:hidden;margin-top:10px}
+  .barra-p div{height:100%;width:0;background:var(--azul2);transition:width .4s}
+  iframe{width:100%;height:78vh;border:1px solid var(--linea);border-radius:8px;margin-top:18px;background:#fff}
+{% endblock %}
+{% block contenido %}
+<div class="tarjeta">
+  <div class="cab">
+    <div>
+      <h1>{{ e.paciente }}</h1>
+      <p class="sub" style="margin:0">{{ e.edad }} años · {{ e.procedimiento }} · {{ e.inicio[:16].replace('T',' ') }} · {{ e.codigo }}</p>
+    </div>
+    <div class="acciones">
+      <button class="btn" id="bPdf" hidden>Abrir / imprimir PDF</button>
+      <button class="btn sec" id="bCarpeta">Carpeta del estudio</button>
+      <a class="btn sec" id="bVideo" target="_blank" hidden>Abrir carpeta en Drive</a>
+      <button class="btn sec" id="bRe" hidden>Reintentar</button>
+      <a class="btn sec" href="{{ url_for('inicio') }}">Nuevo procedimiento</a>
+    </div>
+  </div>
+  <div id="estado" class="aviso" style="margin:18px 0 0">Procesando…</div>
+  <div class="barra-p" id="barra" hidden><div></div></div>
+  <iframe id="visor" hidden></iframe>
+</div>
+{% endblock %}
+{% block js %}
+<script>
+const COD = "{{ e.codigo }}";
+const PDF = "{{ url_for('archivo', codigo=e.codigo, ruta='reporte.pdf') }}";
+let pdfMostrado = false;
+async function revisar(){
+  const s = await (await fetch('/api/trabajo/' + COD)).json();
+  const est = document.getElementById('estado');
+  est.textContent = s.estado === 'error' ? 'Error: ' + (s.error || '') + ' — puede reintentar.' : (s.paso || 'Procesando…');
+  est.className = 'aviso' + (s.estado === 'listo' ? ' ok' : '');
+  const barra = document.getElementById('barra');
+  barra.hidden = !(s.subida_pct != null && !s.subido && s.estado === 'procesando');
+  barra.firstElementChild.style.width = (s.subida_pct || 0) + '%';
+  if (s.reporte && !pdfMostrado) {
+    pdfMostrado = true;
+    document.getElementById('bPdf').hidden = false;
+    const v = document.getElementById('visor'); v.src = PDF + '?t=' + Date.now(); v.hidden = false;
+  }
+  if (s.carpeta_url || s.enlace) { const b = document.getElementById('bVideo'); b.href = s.carpeta_url || s.enlace; b.hidden = !s.subido; }
+  document.getElementById('bRe').hidden = s.estado !== 'error';
+  if (s.estado === 'procesando') setTimeout(revisar, 1500);
+}
+document.getElementById('bPdf').onclick = () => fetch('/api/abrir/' + COD + '?que=pdf', {method:'POST'});
+document.getElementById('bCarpeta').onclick = () => fetch('/api/abrir/' + COD + '?que=carpeta', {method:'POST'});
+document.getElementById('bRe').onclick = async () => {
+  await fetch('/api/reintentar/' + COD, {method:'POST'}); pdfMostrado = false; revisar();
+};
+revisar();
+</script>
+{% endblock %}

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Su estudio · EndoView</title>
+<style>
+  :root{--azul:#1F4E79;--gris:#5F6B76;--fondo:#F3F5F8;--linea:#D9E0E7}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--fondo);color:#1C2430}
+  header{background:var(--azul);color:#fff;padding:20px 18px 18px}
+  header h1{margin:0;font-size:20px} header p{margin:4px 0 0;opacity:.85;font-size:14px}
+  main{max-width:760px;margin:0 auto;padding:18px 16px 40px}
+  .tarjeta{background:#fff;border:1px solid var(--linea);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+  .tarjeta b{display:block;font-size:17px} .tarjeta span{color:var(--gris);font-size:14px}
+  nav{display:grid;grid-template-columns:repeat(auto-fit,minmax(0,1fr));gap:10px;margin-bottom:16px}
+  nav button{border:1px solid var(--linea);background:#fff;border-radius:12px;padding:16px 6px;color:var(--azul);
+    display:flex;flex-direction:column;align-items:center;gap:6px;font:600 26px system-ui;cursor:pointer}
+  nav button span{font-size:14px} nav button.on{background:var(--azul);color:#fff;border-color:var(--azul)}
+  section{display:none} section.on{display:block}
+  .marco{position:relative;background:#000;border-radius:10px;overflow:hidden}
+  .marco.v{aspect-ratio:16/9} .marco.r{height:75vh;background:#fff;border:1px solid var(--linea)}
+  .marco iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  .rejilla{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .rejilla a{position:relative;display:block;border-radius:8px;overflow:hidden;background:#000}
+  .rejilla img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+  .rejilla b{position:absolute;top:6px;left:6px;background:var(--azul);color:#fff;font-size:12px;padding:1px 7px;border-radius:9px}
+  .bajar{display:block;text-align:center;margin-top:12px;padding:14px;border-radius:10px;background:var(--azul);color:#fff;text-decoration:none;font-weight:600}
+  .nota{color:var(--gris);font-size:13px;text-align:center}
+  .aviso{background:#FFF4E5;border:1px solid #F5D6A8;color:#7A4B00;padding:14px;border-radius:10px}
+  .cargando{color:var(--gris);text-align:center;padding:40px 0}
+  @media(min-width:620px){.rejilla{grid-template-columns:repeat(4,1fr)}}
+</style>
+</head>
+<body>
+<header><h1 id="clinica">Su estudio</h1><p id="medico" hidden></p></header>
+<main id="main"><p class="cargando">Cargando su estudio…</p></main>
+<script>
+// Llave pública de solo lectura: limitada a Google Drive y a este sitio web.
+const LLAVE = 'AIzaSyDQHvfrLYshE-D0ApkxVEcVvJjXc2SIK8w';
+const API = 'https://www.googleapis.com/drive/v3/files';
+const $ = id => document.getElementById(id);
+const esc = t => String(t || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ver = id => `https://drive.google.com/file/d/${id}/preview`;
+const bajar = id => `https://drive.google.com/uc?export=download&id=${id}`;
+const mini = (id, w) => `https://drive.google.com/thumbnail?id=${id}&sz=w${w}`;
+
+function aviso(texto) { $('main').innerHTML = `<div class="aviso">${texto}</div>`; }
+
+async function api(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+async function iniciar() {
+  const id = new URLSearchParams(location.search).get('e') || '';
+  if (!/^[\w-]{10,}$/.test(id)) return aviso('Este enlace no es válido. Revise el código QR de su reporte.');
+  let carpeta, lista;
+  try {
+    carpeta = await api(`${API}/${id}?fields=name,description,mimeType&key=${LLAVE}`);
+    lista = await api(`${API}?q=${encodeURIComponent(`'${id}' in parents and trashed = false`)}` +
+                      `&fields=files(id,name)&pageSize=50&key=${LLAVE}`);
+  } catch (e) {
+    return aviso('Este estudio ya no está disponible: el acceso pudo haber vencido. ' +
+                 'Si necesita sus archivos, comuníquese con su médico.');
+  }
+  let info = {};
+  try { info = JSON.parse(carpeta.description || '{}'); } catch (e) {}
+  if (info.app !== 'EndoView' || carpeta.mimeType !== 'application/vnd.google-apps.folder')
+    return aviso('Este enlace no es válido. Revise el código QR de su reporte.');
+
+  if (info.clinica) { $('clinica').textContent = info.clinica; document.title = info.clinica + ' · Su estudio'; }
+  if (info.medico) { $('medico').textContent = info.medico + (info.especialidad ? ' · ' + info.especialidad : ''); $('medico').hidden = false; }
+  if (info.vence && new Date() > new Date(info.vence))
+    return aviso('El acceso a este estudio ya venció. Si necesita sus archivos, comuníquese con su médico.');
+
+  const a = {video: null, reporte: null, fotos: []};
+  for (const f of lista.files || []) {
+    if (/^Video_/i.test(f.name)) a.video = f.id;
+    else if (/^Reporte_/i.test(f.name)) a.reporte = f.id;
+    else if (/^Foto_\d+/i.test(f.name)) a.fotos.push(f);
+  }
+  a.fotos.sort((x, y) => x.name < y.name ? -1 : 1);
+
+  let h = info.procedimiento ? `<div class="tarjeta"><b>${esc(info.procedimiento)}</b><span>${esc(info.fecha)} · Estudio ${esc(info.codigo)}</span></div>` : '';
+  h += '<nav>'
+    + (a.video ? '<button data-s="video">▶<span>Ver video</span></button>' : '')
+    + (a.fotos.length ? '<button data-s="fotos">▦<span>Ver fotos</span></button>' : '')
+    + (a.reporte ? '<button data-s="reporte">▤<span>Ver reporte</span></button>' : '') + '</nav>';
+  if (a.video) h += `<section id="video"><div class="marco v"><iframe src="${ver(a.video)}" allow="autoplay; fullscreen" allowfullscreen></iframe></div>
+    <a class="bajar" href="${bajar(a.video)}">Descargar video</a>
+    <p class="nota">Si el video aún no se ve, espere unos minutos: Google lo está procesando.</p></section>`;
+  if (a.fotos.length) h += '<section id="fotos"><div class="rejilla">'
+    + a.fotos.map((f, i) => `<a href="${mini(f.id, 2400)}" target="_blank" rel="noopener"><img loading="lazy" src="${mini(f.id, 700)}" alt="Foto ${i + 1}"><b>${i + 1}</b></a>`).join('')
+    + '</div><p class="nota">Toque una foto para verla en grande y guardarla.</p></section>';
+  if (a.reporte) h += `<section id="reporte"><div class="marco r"><iframe src="${ver(a.reporte)}"></iframe></div>
+    <a class="bajar" href="${bajar(a.reporte)}">Descargar reporte (PDF)</a></section>`;
+  if (!a.video && !a.fotos.length && !a.reporte) h += '<div class="aviso">Sus archivos todavía se están subiendo. Intente de nuevo en unos minutos.</div>';
+  if (info.vence_texto) h += `<p class="nota">Disponible hasta el ${esc(info.vence_texto)}. Descargue sus archivos para conservarlos.</p>`;
+  if (info.telefono) h += `<p class="nota">¿Dudas? Llame al ${esc(info.telefono)}</p>`;
+  $('main').innerHTML = h;
+
+  const bs = document.querySelectorAll('nav button');
+  const ir = s => { bs.forEach(b => b.classList.toggle('on', b.dataset.s === s));
+                    document.querySelectorAll('section').forEach(x => x.classList.toggle('on', x.id === s)); };
+  bs.forEach(b => b.onclick = () => ir(b.dataset.s));
+  if (bs.length) ir(bs[0].dataset.s);
+}
+iniciar();
+</script>
+</body>
+</html>

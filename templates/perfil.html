@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block titulo %}{{ 'Perfil del médico' }} · EndoView{% endblock %}
+{% block contenido %}
+<div class="tarjeta" style="max-width:720px;margin:0 auto">
+  {% if modo == 'registro' %}
+    <h1>{{ 'Paso 1: Perfil del médico' if primero else 'Agregar médico' }}</h1>
+    <p class="sub">Estos datos aparecen en el encabezado y la firma de cada reporte.</p>
+  {% else %}
+    <h1>Mi perfil</h1>
+    <p class="sub">Estos datos aparecen en el encabezado y la firma de cada reporte.</p>
+  {% endif %}
+  <form method="post">
+    <h2 style="margin-top:6px">Acceso</h2>
+    <div class="fila">
+      <div>
+        <label>Usuario</label>
+        {% if modo == 'registro' %}
+          <input name="usuario" value="{{ datos.usuario or '' }}" autocomplete="username" required>
+        {% else %}
+          <input value="{{ usuario }}" disabled>
+        {% endif %}
+      </div>
+      <div></div>
+      <div>
+        <label>{{ 'Clave' if modo == 'registro' else 'Clave nueva (opcional)' }}</label>
+        <input name="clave" type="password" autocomplete="new-password" minlength="6"
+               {{ 'required' if modo == 'registro' }}>
+      </div>
+      <div>
+        <label>Repetir clave</label>
+        <input name="clave2" type="password" autocomplete="new-password" minlength="6"
+               {{ 'required' if modo == 'registro' }}>
+      </div>
+    </div>
+
+    <h2 style="margin-top:24px">Datos profesionales</h2>
+    <label>Nombre completo (como aparecerá en la firma)</label>
+    <input name="nombre" value="{{ datos.nombre or '' }}" placeholder="Dr. Juan Pérez López" required>
+    <div class="fila">
+      <div><label>Especialidad</label>
+        <input name="especialidad" value="{{ datos.especialidad or '' }}" placeholder="Gastroenterología y Endoscopia"></div>
+      <div><label>Clínica u hospital</label>
+        <input name="clinica" value="{{ datos.clinica or '' }}"></div>
+      <div><label>Cédula profesional</label>
+        <input name="cedula" value="{{ datos.cedula or '' }}"></div>
+      <div><label>Cédula de especialidad</label>
+        <input name="cedula_esp" value="{{ datos.cedula_esp or '' }}"></div>
+      <div><label>Teléfono</label>
+        <input name="telefono" value="{{ datos.telefono or '' }}"></div>
+      <div><label>Correo</label>
+        <input name="correo" type="email" value="{{ datos.correo or '' }}"></div>
+    </div>
+    <label>Dirección</label>
+    <input name="direccion" value="{{ datos.direccion or '' }}">
+    <button class="btn" style="margin-top:22px">{{ 'Crear perfil' if modo == 'registro' else 'Guardar' }}</button>
+    {% if modo == 'perfil' %}
+      <a class="btn sec" style="margin-top:22px;margin-left:8px" href="{{ url_for('registro') }}">Agregar otro médico</a>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

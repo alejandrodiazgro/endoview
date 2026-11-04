@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}EndoView{% endblock %}</title>
+<style>
+  :root{
+    --azul:#1F4E79; --azul2:#2E6DA4; --fondo:#F3F5F8; --tarjeta:#fff; --texto:#1C2430;
+    --gris:#5F6B76; --linea:#D9E0E7; --rojo:#C62828; --verde:#2E7D32; --radio:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       background:var(--fondo);color:var(--texto)}
+  header.barra{display:flex;align-items:center;gap:16px;padding:10px 22px;background:var(--azul);color:#fff}
+  header.barra .marca{font-weight:700;font-size:17px;letter-spacing:.3px}
+  header.barra .marca span{opacity:.65;font-weight:400}
+  header.barra nav{margin-left:auto;display:flex;gap:16px;align-items:center}
+  header.barra a{color:#fff;text-decoration:none;opacity:.85}
+  header.barra a:hover{opacity:1}
+  main{max-width:1100px;margin:28px auto;padding:0 20px}
+  .tarjeta{background:var(--tarjeta);border:1px solid var(--linea);border-radius:var(--radio);padding:22px 24px}
+  h1{font-size:22px;margin:0 0 4px} h2{font-size:17px;margin:0 0 14px}
+  .sub{color:var(--gris);margin:0 0 18px}
+  label{display:block;font-size:13px;font-weight:600;color:var(--gris);margin:12px 0 4px}
+  input,select,textarea{width:100%;padding:10px 12px;border:1px solid var(--linea);border-radius:8px;
+       font:inherit;background:#fff;color:inherit}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--azul2);outline-offset:-1px;border-color:transparent}
+  textarea{resize:vertical;min-height:70px}
+  .fila{display:grid;gap:14px;grid-template-columns:1fr 1fr}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;
+       padding:11px 18px;font:600 15px system-ui,sans-serif;cursor:pointer;background:var(--azul);color:#fff;text-decoration:none}
+  .btn:hover{background:var(--azul2)}
+  .btn.sec{background:#fff;color:var(--azul);border:1px solid var(--linea)}
+  .btn.peligro{background:#fff;color:var(--rojo);border:1px solid #f0c9c9}
+  .btn.ancho{width:100%}
+  .aviso{background:#FFF4E5;border:1px solid #F5D6A8;color:#7A4B00;padding:10px 14px;border-radius:8px;margin-bottom:16px}
+  .ok{background:#EAF5EA;border-color:#BFDFC0;color:#1E5B21}
+  table.lista{width:100%;border-collapse:collapse;font-size:14px}
+  table.lista th{text-align:left;color:var(--gris);font-weight:600;font-size:12px;text-transform:uppercase;
+       letter-spacing:.4px;padding:8px 6px;border-bottom:1px solid var(--linea)}
+  table.lista td{padding:9px 6px;border-bottom:1px solid #EEF1F4}
+  .chip{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:600}
+  .chip.listo{background:#EAF5EA;color:var(--verde)} .chip.error{background:#FDECEC;color:var(--rojo)}
+  .chip.procesando,.chip.capturando{background:#E8F0F9;color:var(--azul)}
+  .fuente{display:flex;align-items:center;gap:8px}
+  .fuente-et{font-size:13px;font-weight:600;color:var(--gris);white-space:nowrap}
+  .fuente select{flex:1;min-width:0;width:auto;padding:8px 10px;font-size:14px}
+  .fuente button{border:1px solid var(--linea);background:#fff;color:var(--azul);border-radius:8px;padding:8px 12px;
+       cursor:pointer;font:600 13px system-ui,sans-serif;white-space:nowrap}
+  .fuente button:disabled,.fuente select:disabled{opacity:.6;cursor:wait}
+  @media (max-width:760px){.fila{grid-template-columns:1fr}}
+  {% block css %}{% endblock %}
+</style>
+</head>
+<body class="{% block clase_body %}{% endblock %}">
+{% if usuario %}
+<header class="barra">
+  <div class="marca">EndoView <span>· {{ medico.nombre }}</span></div>
+  <nav>
+    <a href="{{ url_for('inicio') }}">Inicio</a>
+    <a href="{{ url_for('drive') }}">Google Drive</a>
+    <a href="{{ url_for('perfil') }}">Mi perfil</a>
+    <a href="{{ url_for('salir') }}">Salir</a>
+  </nav>
+</header>
+{% endif %}
+<main>
+  {% if usuario %}
+  <div id="actz" class="aviso ok" hidden style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span id="actzTxt" style="flex:1"></span>
+    <button class="btn" id="actzBtn" style="padding:7px 14px">Actualizar ahora</button>
+  </div>
+  {% endif %}
+  {% with m = get_flashed_messages() %}{% for x in m %}<div class="aviso">{{ x }}</div>{% endfor %}{% endwith %}
+  {% block contenido %}{% endblock %}
+</main>
+{% if usuario %}
+<footer style="text-align:center;color:var(--gris);font-size:12px;padding:6px 0 18px">
+  EndoView {{ version }} · <a href="#" id="actzBuscar" style="color:inherit">Buscar actualizaciones</a>
+  <span id="actzMsg"></span>
+</footer>
+<script>
+(function () {
+  const caja = document.getElementById('actz'), txt = document.getElementById('actzTxt'),
+        btn = document.getElementById('actzBtn'), msg = document.getElementById('actzMsg');
+  if (!caja) return;
+  let siguiendo = false;
+  function pintar(s) {
+    const mostrar = ['disponible', 'descargando', 'instalando', 'error'].includes(s.estado) && s.nueva;
+    caja.hidden = !mostrar; caja.style.display = mostrar ? 'flex' : 'none';
+    btn.hidden = !['disponible', 'error'].includes(s.estado);
+    if (s.estado === 'disponible') txt.textContent = `Hay una versión nueva de EndoView (${s.nueva}). Se instala sola en menos de un minuto y sus estudios no se tocan.`;
+    if (s.estado === 'descargando') txt.textContent = `Descargando EndoView ${s.nueva}… ${s.progreso}%`;
+    if (s.estado === 'instalando') txt.textContent = 'Instalando… EndoView se cerrará y volverá a abrirse solo.';
+    if (s.estado === 'error') txt.textContent = 'No se pudo actualizar: ' + (s.error || '') + ' Puede reintentar.';
+    if (['descargando', 'instalando'].includes(s.estado) && !siguiendo) { siguiendo = true; seguir(); }
+  }
+  async function consultar() { try { const s = await (await fetch('/api/actualizacion')).json(); pintar(s); return s; } catch (e) {} }
+  async function seguir() { const s = await consultar(); if (s && ['descargando', 'instalando'].includes(s.estado)) setTimeout(seguir, 1000); else siguiendo = false; }
+  btn.onclick = async () => {
+    const r = await fetch('/api/actualizacion/instalar', {method: 'POST'}); const s = await r.json();
+    if (s.error && r.status === 409) return alert(s.error);
+    pintar(s);
+  };
+  document.getElementById('actzBuscar').onclick = async ev => {
+    ev.preventDefault(); msg.textContent = '· buscando…';
+    const s = await (await fetch('/api/actualizacion/buscar', {method: 'POST'})).json();
+    msg.textContent = s.estado === 'al_dia' ? '· ya tiene la versión más reciente' :
+                      s.estado === 'sin_conexion' ? '· sin conexión a internet' : '';
+    pintar(s);
+  };
+  consultar(); setInterval(consultar, 10 * 60 * 1000);
+})();
+</script>
+{% endif %}
+{% block js %}{% endblock %}
+</body>
+</html>

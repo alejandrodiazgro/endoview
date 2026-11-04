@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+salida/
+datos/
+config.json
+credentials.json
+.venv*/
