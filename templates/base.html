@@ -186,7 +186,7 @@
 </header>
 {% endif %}
 <main>
-  {% if usuario %}
+  {% if not usuario %}
   <div id="actz" class="aviso ok" hidden style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span id="actzTxt" style="flex:1"></span>
     <button class="btn" id="actzBtn">Actualizar ahora</button>
@@ -283,6 +283,13 @@ async function googleFlujo(proposito, alEsperar) {
   ver(); setInterval(ver, 5000);
 })();
 </script>
+{% endif %}
+{% if usuario %}
+<footer class="pie">
+  EndoView {{ version }}
+  <button type="button" onclick="cambiarLetra()" title="Tamaño de letra">Aa</button>
+</footer>
+{% else %}
 <footer class="pie">
   EndoView {{ version }} · <a href="#" id="actzBuscar">Buscar actualizaciones</a>
   <span id="actzMsg"></span>
@@ -318,7 +325,7 @@ async function googleFlujo(proposito, alEsperar) {
                       s.estado === 'sin_conexion' ? '· sin conexión a internet' : '';
     pintar(s);
   };
-  consultar(); setInterval(consultar, 10 * 60 * 1000);
+  consultar(); setTimeout(consultar, 4000); setTimeout(consultar, 12000); setInterval(consultar, 10 * 60 * 1000);
 })();
 </script>
 {% endif %}

@@ -984,20 +984,17 @@ def drive_desconectar():
 
 # ---------------- actualizaciones ----------------
 @app.route("/api/actualizacion")
-@requiere_login
 def api_actualizacion():
     return jsonify(actualizador.estado())
 
 
 @app.route("/api/actualizacion/buscar", methods=["POST"])
-@requiere_login
 def api_actualizacion_buscar():
     actualizador.buscar(forzar=True)
     return jsonify(actualizador.estado())
 
 
 @app.route("/api/actualizacion/instalar", methods=["POST"])
-@requiere_login
 def api_actualizacion_instalar():
     if any(e["estado"] == "capturando" for e in A.listar_estudios()) or (
             cam is not None and cam.estado()["grabando"]):
