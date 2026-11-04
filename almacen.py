@@ -152,6 +152,16 @@ def _guardar(todos):
     _escribir(ARCH_MEDICOS, todos)
 
 
+def _ahora():
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _tocar(m):
+    """Cambio que debe viajar a las otras computadoras del médico (vía su Drive)."""
+    m["actualizado"] = _ahora()
+    m["perfil_sync"] = True
+
+
 def crear_medico(usuario, clave, perfil, rol=None, google=None):
     """Crea el usuario y devuelve su código de recuperación (se muestra una sola vez)."""
     usuario = usuario.strip().lower()
@@ -174,6 +184,7 @@ def crear_medico(usuario, clave, perfil, rol=None, google=None):
             "recuperacion": generate_password_hash(codigo),
             "debe_cambiar": False,
         }
+        _tocar(todos[usuario])
         _guardar(todos)
     return codigo
 
@@ -221,6 +232,7 @@ def actualizar_perfil(usuario, datos, clave_nueva=None):
         if clave_nueva:
             todos[usuario]["clave"] = generate_password_hash(clave_nueva)
             todos[usuario]["debe_cambiar"] = False
+        _tocar(todos[usuario])
         _guardar(todos)
 
 
@@ -229,6 +241,7 @@ def cambiar_clave(usuario, nueva):
         todos = medicos()
         todos[usuario]["clave"] = generate_password_hash(nueva)
         todos[usuario]["debe_cambiar"] = False
+        _tocar(todos[usuario])
         _guardar(todos)
 
 
@@ -248,6 +261,7 @@ def nuevo_codigo_recuperacion(usuario):
     with _lock:
         todos = medicos()
         todos[usuario]["recuperacion"] = generate_password_hash(codigo)
+        _tocar(todos[usuario])
         _guardar(todos)
     return codigo
 
@@ -293,7 +307,63 @@ def vincular_google(usuario, correo):
         if correo and any(m.get("google") == correo for u, m in todos.items() if u != usuario):
             raise ValueError("Esa cuenta de Google ya está vinculada a otro usuario.")
         todos[usuario]["google"] = correo
+        if correo:
+            todos[usuario]["perfil_sync"] = True
         _guardar(todos)
+
+
+# ---- usuarios compartidos entre computadoras (copia en el Drive de cada médico) ----
+def exportar_usuario(usuario):
+    """Lo que se guarda en el Drive del médico. La clave y el código van cifrados (hash)."""
+    m = medicos()[usuario]
+    return {"app": "EndoView", "tipo": "usuario", "usuario": usuario, "google": m.get("google"),
+            "clave": m["clave"], "recuperacion": m.get("recuperacion"), "perfil": m["perfil"],
+            "actualizado": m.get("actualizado") or m.get("creado") or _ahora()}
+
+
+def pendientes_perfil():
+    return [u for u, m in medicos().items() if m.get("perfil_sync") and m.get("google") and m["activo"]]
+
+
+def marcar_perfil_subido(usuario, actualizado):
+    with _lock:
+        todos = medicos()
+        m = todos.get(usuario)
+        if m and (m.get("actualizado") or "") <= actualizado:
+            m["perfil_sync"] = False
+            _guardar(todos)
+
+
+def importar_usuario(d, google):
+    """Trae (o actualiza) un médico desde la copia de su Drive.
+    Devuelve el nombre de usuario local. Gana el cambio más reciente."""
+    if not d or d.get("tipo") != "usuario" or not d.get("clave"):
+        raise ValueError("La copia del usuario en Drive no es válida.")
+    with _lock:
+        todos = medicos()
+        local = next((u for u, m in todos.items() if m.get("google") == google), None)
+        if local:
+            m = todos[local]
+            if (d.get("actualizado") or "") > (m.get("actualizado") or ""):
+                m.update(clave=d["clave"], recuperacion=d.get("recuperacion"), debe_cambiar=False,
+                         perfil={k: (d["perfil"].get(k) or "") for k in CAMPOS_PERFIL},
+                         actualizado=d["actualizado"], perfil_sync=False)
+                _guardar(todos)
+            return local
+        u = d["usuario"]
+        if u in todos:  # el nombre ya lo usa otro médico en esta computadora
+            n = 2
+            while f"{d['usuario']}{n}" in todos:
+                n += 1
+            u = f"{d['usuario']}{n}"
+        todos[u] = {"clave": d["clave"], "recuperacion": d.get("recuperacion"),
+                    "perfil": {k: (d["perfil"].get(k) or "") for k in CAMPOS_PERFIL},
+                    "creado": _ahora(), "rol": "medico" if todos else "admin", "activo": True,
+                    "google": google, "debe_cambiar": False,
+                    "actualizado": d.get("actualizado") or _ahora(),
+                    "perfil_sync": u != d["usuario"]}
+        _guardar(todos)
+        return u
 
 
 def buscar_por_google(correo):

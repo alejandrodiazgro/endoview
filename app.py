@@ -131,7 +131,7 @@ def google_iniciar():
 
     def tarea():
         try:
-            datos, cred = nube.autorizar(con_drive=proposito in ("registro", "conectar"))
+            datos, cred = nube.autorizar(con_drive=True)
             _g.update(estado="ok", datos=datos, cred=cred)
         except Exception as ex:
             _g.update(estado="error", error=str(ex)[:300])
@@ -155,23 +155,25 @@ def google_completar():
     session.pop("google_llave", None)
     correo = datos["correo"]
 
-    if proposito == "login":
-        u = A.buscar_por_google(correo)
+    if proposito in ("login", "recuperar"):
+        try:
+            u, traido = _usuario_desde_google(datos, cred)
+        except Exception as ex:
+            return jsonify(error=str(ex)), 400
         if not u:
-            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario de EndoView. "
-                                 "Entre con su usuario y clave, y vincúlela en «Mi Google Drive»."), 400
+            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario de EndoView "
+                                 "(ni en esta computadora ni en su Drive). Entre con su usuario y clave, "
+                                 "y vincúlela en «Mi Google Drive»."), 400
         if A.verificar_activo(u) is False:
-            return jsonify(error="Este usuario está desactivado."), 400
+            return jsonify(error="Este usuario está desactivado en esta computadora."), 400
         _entrar(u)
+        if traido:
+            flash("Se trajo su usuario desde su Google Drive: ya puede usar EndoView en esta computadora, "
+                  "también sin internet, con su misma clave.")
+        if proposito == "recuperar":
+            session["puede_cambiar_sin_clave"] = True
+            return jsonify(ir=url_for("clave"))
         return jsonify(ir=url_for("inicio"))
-
-    if proposito == "recuperar":
-        u = A.buscar_por_google(correo)
-        if not u or A.verificar_activo(u) is False:
-            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario activo."), 400
-        _entrar(u)
-        session["puede_cambiar_sin_clave"] = True
-        return jsonify(ir=url_for("clave"))
 
     if proposito == "conectar":
         u = session["usuario"]
@@ -180,17 +182,62 @@ def google_completar():
             nube.guardar_conexion(u, datos, cred)
         except Exception as ex:
             return jsonify(error=str(ex)), 400
+        try:  # si su usuario en Drive es más reciente (cambió la clave en otra PC), se actualiza
+            remoto = nube.leer_usuario_remoto(nube.servicio_de(cred))
+            if remoto:
+                A.importar_usuario(remoto, correo)
+        except Exception:
+            pass
         _marcar_para_subir(u)
         threading.Thread(target=lambda: _reservar(u), daemon=True).start()
         return jsonify(ir=url_for("drive"))
 
-    # registro: se guarda para usarse al enviar el formulario
+    # registro: si el médico ya tiene usuario en su Drive (otra computadora), se trae.
+    try:
+        remoto = nube.leer_usuario_remoto(nube.servicio_de(cred))
+    except Exception:
+        remoto = None
+    if remoto:
+        primero = not A.hay_medicos()
+        u, _ = _usuario_desde_google(datos, cred, remoto)
+        if primero:
+            _entrar(u)
+        flash(f"{remoto['perfil'].get('nombre') or correo} ya tenía usuario de EndoView en otra computadora: "
+              f"se trajo desde su Google Drive (usuario «{u}», con su misma clave).")
+        return jsonify(ir=url_for("inicio") if primero else url_for("usuarios"))
+
+    # registro nuevo: se guarda para usarse al enviar el formulario
     session["google_registro"] = {"correo": correo, "nombre": datos["nombre"]}
     _pendientes_google[correo] = (datos, cred)
     return jsonify(correo=correo, nombre=datos["nombre"])
 
 
 _pendientes_google = {}
+
+
+def _usuario_desde_google(datos, cred, remoto=None):
+    """Busca al médico por su cuenta de Google en esta computadora; si no está, lo trae de la
+    copia en su Drive. Conecta su Drive en esta computadora. Devuelve (usuario, se_trajo)."""
+    correo = datos["correo"]
+    u = A.buscar_por_google(correo)
+    if remoto is None:
+        try:
+            remoto = nube.leer_usuario_remoto(nube.servicio_de(cred))
+        except Exception:
+            remoto = None
+    traido = False
+    if remoto:
+        nuevo = u is None
+        u = A.importar_usuario(remoto, correo)  # crea o actualiza (gana lo más reciente)
+        traido = nuevo
+    if u and A.verificar_activo(u):
+        try:
+            nube.guardar_conexion(u, datos, cred)
+            _marcar_para_subir(u)
+            threading.Thread(target=lambda: _reservar(u), daemon=True).start()
+        except Exception:
+            pass
+    return u, traido
 
 
 def _reservar(u):
@@ -276,6 +323,7 @@ def perfil():
     u = session["usuario"]
     if request.method == "POST":
         A.actualizar_perfil(u, request.form)
+        avisar_sincronizador()
         flash("Perfil guardado.")
         return redirect(url_for("perfil"))
     return render_template("perfil.html", modo="perfil", datos=A.perfil(u),
@@ -306,6 +354,7 @@ def clave():
             if not sin_actual and A.verificar(u, f.get("clave_actual", "")) != "ok":
                 raise ValueError("La clave actual no es correcta.")
             A.cambiar_clave(u, _validar_clave(f))
+            avisar_sincronizador()
         except ValueError as e:
             flash(str(e))
             return render_template("clave.html", sin_actual=sin_actual, info=info)
@@ -325,6 +374,7 @@ def recuperar():
             flash(str(e))
             return render_template("recuperar.html", google=nube.disponible())
         if A.recuperar_con_codigo(f.get("usuario", ""), f.get("codigo", ""), nueva):
+            avisar_sincronizador()
             flash("Listo, su clave fue cambiada. Ya puede entrar.")
             return redirect(url_for("login"))
         flash("El usuario o el código de recuperación no coinciden.")
@@ -712,6 +762,33 @@ def _revocar_vencidos():
                     pass
 
 
+_ultima_bajada = [0.0]
+
+
+def _sincronizar_usuarios(usuarios):
+    """Sube los cambios de clave/perfil al Drive de cada médico y trae los hechos en otras PCs."""
+    raiz = CFG["drive"]["carpeta_raiz"]
+    for u in A.pendientes_perfil():
+        if nube.conectado(u):
+            try:
+                d = A.exportar_usuario(u)
+                nube.guardar_usuario_remoto(nube.servicio(u), raiz, d)
+                A.marcar_perfil_subido(u, d["actualizado"])
+            except Exception:
+                pass
+    if time.time() - _ultima_bajada[0] > 600:
+        _ultima_bajada[0] = time.time()
+        for u in usuarios:
+            info = A.usuario_info(u)
+            if info and info["activo"] and info["google"]:
+                try:
+                    remoto = nube.leer_usuario_remoto(nube.servicio(u))
+                    if remoto:
+                        A.importar_usuario(remoto, info["google"])
+                except Exception:
+                    pass
+
+
 def sincronizador():
     ultima_revision = 0.0
     while True:
@@ -721,7 +798,7 @@ def sincronizador():
             pendientes = [e for e in A.pendientes_de_subir() if e["estado"] == "listo"
                           and nube.conectado(e["usuario"])]
             usuarios = [u for u in A.medicos() if nube.conectado(u)]
-            if not pendientes and not usuarios:
+            if not usuarios:
                 continue
             _sync["en_linea"] = nube.en_linea()
             if not _sync["en_linea"]:
@@ -731,6 +808,7 @@ def sincronizador():
                     nube.reservar_ids(u)
                 except Exception:
                     pass
+            _sincronizar_usuarios(usuarios)
             for e in sorted(pendientes, key=lambda x: x["codigo"]):
                 try:
                     subir_estudio(e["codigo"])

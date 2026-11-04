@@ -1,4 +1,4 @@
 """Versión de EndoView y de dónde se descargan las actualizaciones."""
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 REPO = "alejandrodiazgro/endoview"          # GitHub: compilación y actualizaciones
 VISOR = "https://alejandrodiazgro.github.io/endoview/v/"  # página que abre el QR

@@ -152,6 +152,11 @@ def guardar_conexion(usuario, datos, cred):
 
 
 # ---------------- Drive ----------------
+def servicio_de(cred):
+    from googleapiclient.discovery import build
+    return build("drive", "v3", credentials=cred, cache_discovery=False)
+
+
 def servicio(usuario):
     with _lock:
         if usuario in _servicios:
@@ -296,3 +301,41 @@ def subir(usuario, ruta, id_carpeta, nombre, mimetype, progreso=None, reemplazar
 
 def revocar(usuario, id_archivo, id_permiso):
     servicio(usuario).permissions().delete(fileId=id_archivo, permissionId=id_permiso).execute()
+
+
+# ---------------- usuario compartido entre computadoras ----------------
+# Copia del usuario (perfil + clave cifrada) en el Drive del propio médico, dentro de la
+# carpeta principal. Solo EndoView y el médico pueden verla (permiso drive.file).
+ARCHIVO_USUARIO = "EndoView-usuario.json"
+
+
+def _buscar_archivo_usuario(svc):
+    q = f"name = '{ARCHIVO_USUARIO}' and trashed = false"
+    r = svc.files().list(q=q, fields="files(id, modifiedTime)", spaces="drive",
+                         orderBy="modifiedTime desc").execute().get("files", [])
+    return r[0]["id"] if r else None
+
+
+def leer_usuario_remoto(svc):
+    """Devuelve el dict guardado en Drive o None."""
+    i = _buscar_archivo_usuario(svc)
+    if not i:
+        return None
+    datos = svc.files().get_media(fileId=i).execute()
+    try:
+        return json.loads(datos.decode("utf-8") if isinstance(datos, bytes) else datos)
+    except ValueError:
+        return None
+
+
+def guardar_usuario_remoto(svc, raiz, datos):
+    from googleapiclient.http import MediaInMemoryUpload
+    cuerpo = MediaInMemoryUpload(json.dumps(datos, ensure_ascii=False).encode("utf-8"),
+                                 mimetype="application/json")
+    i = _buscar_archivo_usuario(svc)
+    if i:
+        svc.files().update(fileId=i, media_body=cuerpo).execute()
+    else:
+        svc.files().create(body={"name": ARCHIVO_USUARIO, "parents": [_carpeta(svc, raiz)],
+                                 "description": "Usuario de EndoView (clave cifrada). No lo comparta."},
+                           media_body=cuerpo, fields="id").execute()

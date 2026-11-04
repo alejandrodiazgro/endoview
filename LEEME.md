@@ -27,8 +27,12 @@ los lugares en Drive) y el reporte, las fotos y el video se suben solos en cuant
 
 **Usuarios**: el primer usuario es administrador (*Usuarios*): agrega médicos, restablece claves con una
 clave temporal, activa/desactiva y da permisos de administrador. Cada médico recibe un **código de
-recuperación** para cambiar su clave sin internet. Usuarios y claves (cifradas) se guardan solo en
-la computadora.
+recuperación** para cambiar su clave sin internet.
+
+**Varias computadoras**: el usuario de cada médico que conectó Google se guarda también en *su* Drive
+(con la clave cifrada). En otra computadora basta **Entrar con Google** una vez: se trae su usuario con su
+misma clave y a partir de ahí entra también sin internet. Los cambios de clave o de perfil se pasan solos
+a sus otras computadoras cuando hay internet.
 
 ## Actualizaciones
 
