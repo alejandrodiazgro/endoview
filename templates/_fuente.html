@@ -8,11 +8,13 @@
   const sel = document.getElementById('selFuente'), btn = document.getElementById('bBuscar');
   const esc = t => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-  async function cargar() {
+  async function cargar(forzar) {
     btn.disabled = sel.disabled = true;
     sel.innerHTML = '<option>Buscando dispositivos…</option>';
     try {
-      const j = await (await fetch("{{ url_for('api_camaras') }}")).json();
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 25000);
+      const j = await (await fetch("{{ url_for('api_camaras') }}" + (forzar ? '?forzar=1' : ''), {signal: ctl.signal})).json();
+      clearTimeout(t);
       if (!j.dispositivos.length) {
         sel.innerHTML = '<option value="" selected>No se encontraron dispositivos de imagen</option>';
       } else {
@@ -37,9 +39,9 @@
     else if (!r.ok) avisar('Ese dispositivo no da imagen. Revise que esté conectado y encendido, y que ningún otro programa (OBS, Zoom, etc.) lo esté usando.');
     else notificar('Fuente de video cambiada.');
     else document.dispatchEvent(new CustomEvent('fuente-cambiada', {detail: r}));
-    cargar();
+    cargar(true);
   };
-  btn.onclick = cargar;
+  btn.onclick = () => cargar(true);
   cargar();
 })();
 </script>

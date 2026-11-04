@@ -7,8 +7,12 @@ import subprocess
 import threading
 import time
 
+import logging
+
 import cv2
 import numpy as np
+
+log = logging.getLogger("endoview.captura")
 
 
 def ruta_ffmpeg():
@@ -208,18 +212,35 @@ def _backend():
         cv2.CAP_AVFOUNDATION if so == "Darwin" else cv2.CAP_ANY)
 
 
+def _backends():
+    so = platform.system()
+    if so == "Windows":
+        return [cv2.CAP_DSHOW, cv2.CAP_MSMF]  # si DirectShow falla, Media Foundation
+    return [_backend()]
+
+
 def abrir_dispositivo(indice, res=(1920, 1080), fps=30):
     if indice is None:
         return None
-    cap = cv2.VideoCapture(indice, _backend())
-    if cap.isOpened():
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
-        cap.set(cv2.CAP_PROP_FPS, fps)
-        ok, _ = cap.read()
-        if ok:
-            return cap
-    cap.release()
+    for be in _backends():
+        try:
+            cap = cv2.VideoCapture(indice, be)
+            if cap.isOpened():
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, res[0])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, res[1])
+                cap.set(cv2.CAP_PROP_FPS, fps)
+                ok, _ = cap.read()
+                if not ok:  # algunas webcams no aceptan la resolución pedida
+                    cap.release()
+                    cap = cv2.VideoCapture(indice, be)
+                    ok, _ = cap.read() if cap.isOpened() else (False, None)
+                if ok:
+                    log.info("Dispositivo %s abierto con backend %s", indice, be)
+                    return cap
+            cap.release()
+        except Exception:
+            log.exception("Error al abrir el dispositivo %s", indice)
+    log.warning("El dispositivo %s no dio imagen", indice)
     return None
 
 
@@ -289,6 +310,7 @@ def _nombres_sistema():
             lista = leer_dshow(t)
             if lista:
                 return dict(enumerate(lista))
+        log.warning("ffmpeg no listó dispositivos: %s", (t or "sin salida")[-500:])
     elif so == "Darwin":
         t = _salida_ffmpeg(["-f", "avfoundation", "-list_devices", "true", "-i", ""])
         if t:

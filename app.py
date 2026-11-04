@@ -17,6 +17,9 @@ from functools import wraps
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template,
                    request, send_from_directory, session, url_for)
 
+import logging
+from logging.handlers import RotatingFileHandler
+
 import actualizador
 import almacen as A
 import nube
@@ -26,6 +29,17 @@ from captura import Capturador, convertir_h264, listar_dispositivos
 
 A.iniciar()
 CFG = A.config()
+log = logging.getLogger("endoview")
+log.setLevel(logging.INFO)
+try:
+    _h = RotatingFileHandler(os.path.join(A.DATOS, "endoview.log"), maxBytes=1_000_000, backupCount=2,
+                             encoding="utf-8")
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(_h)
+    logging.getLogger("endoview.captura").addHandler(_h)
+except OSError:
+    pass
+log.info("EndoView %s iniciado", VERSION)
 app = Flask(__name__, template_folder=os.path.join(A.RECURSOS, "templates"),
             static_folder=os.path.join(A.RECURSOS, "static"))
 app.secret_key = A.secreto()
@@ -36,10 +50,22 @@ _trabajos = set()
 _lock_trab = threading.Lock()
 
 
+_lock_cam = threading.Lock()
+
+
 def camara():
+    """Una sola instancia de la cámara. El candado evita que el video en vivo y la lista de
+    dispositivos abran la webcam al mismo tiempo (en Windows eso la traba)."""
     global cam
     if cam is None:
-        cam = Capturador(CFG["camara"], CFG["resolucion"], CFG["fps"])
+        with _lock_cam:
+            if cam is None:
+                try:
+                    cam = Capturador(CFG["camara"], CFG["resolucion"], CFG["fps"])
+                    log.info("Cámara %s abierta (demo=%s)", CFG["camara"], cam.demo)
+                except Exception:
+                    log.exception("No se pudo abrir la cámara")
+                    raise
     return cam
 
 
@@ -605,12 +631,33 @@ def api_grabar_detener():
     return jsonify(camara().estado())
 
 
+_disp = {"t": 0.0, "lista": None}
+_lock_disp = threading.Lock()
+
+
 @app.route("/api/camaras")
 @requiere_login
 def api_camaras():
     c = camara()
     actual = None if c.demo else c.indice
-    return jsonify(actual=actual, dispositivos=listar_dispositivos(actual))
+    forzar = request.args.get("forzar") == "1"
+    with _lock_disp:  # una búsqueda a la vez; se recuerda un minuto
+        if forzar or _disp["lista"] is None or time.time() - _disp["t"] > 60:
+            res = {}
+            hilo = threading.Thread(target=lambda: res.update(l=listar_dispositivos(actual)), daemon=True)
+            hilo.start()
+            hilo.join(15)
+            lista = res.get("l")
+            if lista is None:
+                log.warning("La búsqueda de dispositivos tardó demasiado")
+                lista = [] if actual is None else [{"indice": actual, "nombre": f"Cámara {actual} (en uso)"}]
+            else:
+                _disp.update(t=time.time(), lista=lista)
+        else:
+            lista = _disp["lista"]
+    if actual is not None and not any(d["indice"] == actual for d in lista):
+        lista = lista + [{"indice": actual, "nombre": f"Cámara {actual} (en uso)"}]
+    return jsonify(actual=actual, dispositivos=lista)
 
 
 @app.route("/api/camara", methods=["POST"])
