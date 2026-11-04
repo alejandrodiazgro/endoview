@@ -33,8 +33,9 @@
       r = await (await fetch("{{ url_for('api_camara') }}", {method: 'POST',
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify({indice: +sel.value})})).json();
     } catch (e) { r = {error: 'No se pudo cambiar la fuente.'}; }
-    if (r.error) alert(r.error);
-    else if (!r.ok) alert('Ese dispositivo no da imagen. Revise que esté conectado y encendido, y que ningún otro programa (OBS, Zoom, etc.) lo esté usando.');
+    if (r.error) avisar(r.error);
+    else if (!r.ok) avisar('Ese dispositivo no da imagen. Revise que esté conectado y encendido, y que ningún otro programa (OBS, Zoom, etc.) lo esté usando.');
+    else notificar('Fuente de video cambiada.');
     else document.dispatchEvent(new CustomEvent('fuente-cambiada', {detail: r}));
     cargar();
   };

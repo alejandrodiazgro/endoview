@@ -14,10 +14,10 @@ from reportlab.lib.units import cm
 from reportlab.platypus import (Flowable, Image, KeepTogether, Paragraph,
                                 SimpleDocTemplate, Spacer, Table, TableStyle)
 
-AZUL = colors.HexColor("#1F4E79")
-GRIS = colors.HexColor("#5F6B76")
-LINEA = colors.HexColor("#C9D3DD")
-FONDO = colors.HexColor("#F2F6FA")
+AZUL = colors.HexColor("#135650")  # color de marca EndoView
+GRIS = colors.HexColor("#4B5B66")
+LINEA = colors.HexColor("#CFE0DD")
+FONDO = colors.HexColor("#EEF5F4")
 
 E = {
     "clinica": ParagraphStyle("c", fontName="Helvetica-Bold", fontSize=15, textColor=AZUL, leading=18),

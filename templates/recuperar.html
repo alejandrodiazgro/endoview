@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block titulo %}Recuperar clave · EndoView{% endblock %}
 {% block css %}
-  .g{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#fff;color:#1F1F1F;
-     border:1px solid #747775;border-radius:8px;padding:10px;font:600 15px system-ui,sans-serif;cursor:pointer}
-  .g:disabled{opacity:.6;cursor:wait}
 {% endblock %}
 {% block contenido %}
 <div class="tarjeta" style="max-width:460px;margin:30px auto">
@@ -11,7 +8,7 @@
 
   {% if google %}
   <h2 style="margin-top:18px">Con su cuenta de Google <span class="sub" style="font-weight:400">(necesita internet)</span></h2>
-  <button class="g" id="bG" type="button">{% include "_logo_google.html" %}<span id="bGt">Recuperar con Google</span></button>
+  <button class="g ancho" id="bG" type="button">{% include "_logo_google.html" %}<span id="bGt">Recuperar con Google</span></button>
   <p class="sub" id="msgG" style="margin:8px 0 0;font-size:13px">Funciona si vinculó su cuenta de Google a EndoView.</p>
   {% endif %}
 

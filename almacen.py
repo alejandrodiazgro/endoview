@@ -256,6 +256,13 @@ def restablecer_clave(usuario):
     return temporal
 
 
+def marcar_debe_cambiar(usuario):
+    with _lock:
+        todos = medicos()
+        todos[usuario]["debe_cambiar"] = True
+        _guardar(todos)
+
+
 def nuevo_codigo_recuperacion(usuario):
     codigo = _codigo_aleatorio()
     with _lock:

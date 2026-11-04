@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block titulo %}Código de recuperación · EndoView{% endblock %}
 {% block css %}
-  .codigo{font:700 34px ui-monospace,Consolas,monospace;letter-spacing:3px;text-align:center;background:#F7F9FB;
-          border:2px dashed var(--azul);border-radius:10px;padding:22px;margin:18px 0;color:var(--azul)}
-  @media print{header.barra,footer,.no-imp,#actz{display:none!important} body{background:#fff}}
+  .codigo{font:700 34px ui-monospace,Consolas,monospace;letter-spacing:3px;text-align:center;background:rgba(255,255,255,.7);
+          border:2px dashed var(--brand);border-radius:20px;padding:22px;margin:18px 0;color:var(--azul)}
+  @media print{header.barra,footer,.no-imp,#actz{display:none!important} body::before{display:none} html,body{background:#fff}}
 {% endblock %}
 {% block contenido %}
 <div class="tarjeta" style="max-width:620px;margin:0 auto">

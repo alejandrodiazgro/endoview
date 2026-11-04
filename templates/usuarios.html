@@ -2,12 +2,12 @@
 {% block titulo %}Usuarios · EndoView{% endblock %}
 {% block css %}
   .acc{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-  .acc button,.acc a{border:1px solid var(--linea);background:#fff;color:var(--azul);border-radius:6px;padding:5px 9px;
-     font:600 12px system-ui,sans-serif;cursor:pointer;text-decoration:none;white-space:nowrap}
-  .acc .rojo{color:var(--rojo)}
+  .acc button,.acc a{min-height:30px;border:1px solid rgba(255,255,255,.9);background:rgba(255,255,255,.75);color:var(--ink);border-radius:999px;padding:0 11px;font:600 12px var(--font);cursor:pointer;text-decoration:none;white-space:nowrap;display:inline-flex;align-items:center;box-shadow:0 1px 4px rgba(16,40,48,.06)}
+  .acc button:hover,.acc a:hover{background:#fff}
+  .acc .rojo{color:var(--danger-ink)}
   tr.inactivo td{opacity:.5}
-  .rol{font-size:12px;font-weight:600;padding:2px 8px;border-radius:10px;background:#E8F0F9;color:var(--azul)}
-  .rol.admin{background:#1F4E79;color:#fff}
+  .rol{font-size:12px;font-weight:600;padding:2px 9px;border-radius:999px;background:var(--brand-soft);color:var(--brand)}
+  .rol.admin{background:var(--brand);color:#fff}
   .peq{font-size:12px;color:var(--gris)}
 {% endblock %}
 {% block contenido %}
@@ -26,24 +26,23 @@
       <td><span class="rol {{ m.rol }}">{{ 'Administrador' if m.rol == 'admin' else 'Médico' }}</span></td>
       <td>{% if m.drive %}✓ {{ m.drive }}{% elif m.google %}<span class="peq">{{ m.google }} (sin Drive)</span>{% else %}<span class="peq">No conectado</span>{% endif %}</td>
       <td>
-        <form method="post" action="{{ url_for('usuario_accion', u=m.usuario) }}" class="acc"
-              onsubmit="return confirm(this.dataset.msg || '¿Continuar?')">
+        <form method="post" action="{{ url_for('usuario_accion', u=m.usuario) }}" class="acc">
           <a href="{{ url_for('usuario_editar', u=m.usuario) }}">Editar</a>
           {% if m.activo %}
-            <button name="accion" value="restablecer" onclick="this.form.dataset.msg='¿Dar una clave temporal a {{ m.usuario }}? Su clave actual dejará de funcionar.'">Restablecer clave</button>
+            <button name="accion" value="restablecer" data-confirmar="¿Dar una clave temporal a {{ m.usuario }}? Su clave actual dejará de funcionar.">Restablecer clave</button>
             {% if m.rol == 'admin' %}
-              <button name="accion" value="medico" onclick="this.form.dataset.msg='¿Quitar permisos de administrador a {{ m.usuario }}?'">Quitar admin</button>
+              <button name="accion" value="medico" data-confirmar="¿Quitar permisos de administrador a {{ m.usuario }}?">Quitar admin</button>
             {% else %}
-              <button name="accion" value="admin" onclick="this.form.dataset.msg='¿Hacer administrador a {{ m.usuario }}?'">Hacer admin</button>
+              <button name="accion" value="admin" data-confirmar="¿Hacer administrador a {{ m.usuario }}?">Hacer admin</button>
             {% endif %}
             {% if m.google %}
-              <button name="accion" value="desvincular" onclick="this.form.dataset.msg='¿Desvincular la cuenta de Google de {{ m.usuario }}? Sus estudios ya no se subirán a su Drive.'">Desvincular Google</button>
+              <button name="accion" value="desvincular" data-confirmar="¿Desvincular la cuenta de Google de {{ m.usuario }}? Sus estudios ya no se subirán a su Drive.">Desvincular Google</button>
             {% endif %}
             {% if m.usuario != usuario %}
-              <button name="accion" value="desactivar" class="rojo" onclick="this.form.dataset.msg='¿Desactivar a {{ m.usuario }}? No podrá entrar, pero sus estudios se conservan.'">Desactivar</button>
+              <button name="accion" value="desactivar" class="rojo" data-peligro="1" data-confirmar="¿Desactivar a {{ m.usuario }}? No podrá entrar, pero sus estudios se conservan.">Desactivar</button>
             {% endif %}
           {% else %}
-            <button name="accion" value="activar" onclick="this.form.dataset.msg='¿Activar de nuevo a {{ m.usuario }}?'">Activar</button>
+            <button name="accion" value="activar" data-confirmar="¿Activar de nuevo a {{ m.usuario }}?">Activar</button>
           {% endif %}
         </form>
       </td>

@@ -4,6 +4,7 @@ Ejecutar:  python app.py   (se abre el navegador en http://127.0.0.1:5050)
 """
 import os
 import platform
+import re
 import secrets
 import shutil
 import subprocess
@@ -25,7 +26,8 @@ from captura import Capturador, convertir_h264, listar_dispositivos
 
 A.iniciar()
 CFG = A.config()
-app = Flask(__name__, template_folder=os.path.join(A.RECURSOS, "templates"))
+app = Flask(__name__, template_folder=os.path.join(A.RECURSOS, "templates"),
+            static_folder=os.path.join(A.RECURSOS, "static"))
 app.secret_key = A.secreto()
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
 
@@ -160,16 +162,15 @@ def google_completar():
             u, traido = _usuario_desde_google(datos, cred)
         except Exception as ex:
             return jsonify(error=str(ex)), 400
-        if not u:
-            return jsonify(error=f"La cuenta {correo} no está vinculada a ningún usuario de EndoView "
-                                 "(ni en esta computadora ni en su Drive). Entre con su usuario y clave, "
-                                 "y vincúlela en «Mi Google Drive»."), 400
+        if not u:  # cuenta de Google nueva: se crea su usuario
+            u = _crear_desde_google(datos, cred)
+            return jsonify(ir=url_for("clave"))
         if A.verificar_activo(u) is False:
             return jsonify(error="Este usuario está desactivado en esta computadora."), 400
         _entrar(u)
         if traido:
             flash("Se trajo su usuario desde su Google Drive: ya puede usar EndoView en esta computadora, "
-                  "también sin internet, con su misma clave.")
+                  "también sin internet, con su misma clave.", "ok")
         if proposito == "recuperar":
             session["puede_cambiar_sin_clave"] = True
             return jsonify(ir=url_for("clave"))
@@ -203,7 +204,7 @@ def google_completar():
         if primero:
             _entrar(u)
         flash(f"{remoto['perfil'].get('nombre') or correo} ya tenía usuario de EndoView en otra computadora: "
-              f"se trajo desde su Google Drive (usuario «{u}», con su misma clave).")
+              f"se trajo desde su Google Drive (usuario «{u}», con su misma clave).", "ok")
         return jsonify(ir=url_for("inicio") if primero else url_for("usuarios"))
 
     # registro nuevo: se guarda para usarse al enviar el formulario
@@ -215,11 +216,42 @@ def google_completar():
 _pendientes_google = {}
 
 
+def _usuario_libre(correo):
+    base = re.sub(r"[^a-z0-9._-]", "", correo.split("@")[0].lower()) or "medico"
+    u, n = base, 2
+    while u in A.medicos():
+        u, n = f"{base}{n}", n + 1
+    return u
+
+
+def _crear_desde_google(datos, cred):
+    """Primer «Entrar con Google» de una cuenta sin usuario: se crea, se conecta su Drive y se le
+    pide elegir una clave para poder entrar también sin internet."""
+    correo = datos["correo"]
+    u = _usuario_libre(correo)
+    codigo = A.crear_medico(u, secrets.token_urlsafe(24),
+                            {"nombre": datos["nombre"] or correo, "correo": correo}, google=correo)
+    A.marcar_debe_cambiar(u)
+    try:
+        nube.guardar_conexion(u, datos, cred)
+        threading.Thread(target=lambda: _reservar(u), daemon=True).start()
+    except Exception:
+        pass
+    _entrar(u)
+    session["nuevo_google"] = True
+    session["codigo_mostrar"] = {"usuario": u, "nombre": datos["nombre"] or correo, "codigo": codigo}
+    return u
+
+
 def _usuario_desde_google(datos, cred, remoto=None):
     """Busca al médico por su cuenta de Google en esta computadora; si no está, lo trae de la
     copia en su Drive. Conecta su Drive en esta computadora. Devuelve (usuario, se_trajo)."""
     correo = datos["correo"]
     u = A.buscar_por_google(correo)
+    if not u:  # usuarios de versiones anteriores: Drive conectado pero sin vincular su Google
+        u = next((x for x in A.medicos() if (nube.cuenta(x) or "").lower() == correo), None)
+        if u:
+            A.vincular_google(u, correo)
     if remoto is None:
         try:
             remoto = nube.leer_usuario_remoto(nube.servicio_de(cred))
@@ -324,7 +356,7 @@ def perfil():
     if request.method == "POST":
         A.actualizar_perfil(u, request.form)
         avisar_sincronizador()
-        flash("Perfil guardado.")
+        flash("Perfil guardado.", "ok")
         return redirect(url_for("perfil"))
     return render_template("perfil.html", modo="perfil", datos=A.perfil(u),
                            info=A.usuario_info(u), cuenta_google=nube.cuenta(u))
@@ -357,11 +389,18 @@ def clave():
             avisar_sincronizador()
         except ValueError as e:
             flash(str(e))
-            return render_template("clave.html", sin_actual=sin_actual, info=info)
+            return render_template("clave.html", sin_actual=sin_actual, info=info,
+                                   nuevo=session.get("nuevo_google"))
         session.pop("puede_cambiar_sin_clave", None)
-        flash("Clave cambiada.")
+        if session.pop("nuevo_google", None):
+            flash(f"Listo. Su usuario es «{u}»: puede entrar con Google o, sin internet, con ese usuario y su clave. "
+                  "Complete sus datos profesionales en «Mi perfil» para que salgan en sus reportes.", "ok")
+        else:
+            flash("Clave cambiada.", "ok")
+        if session.get("codigo_mostrar"):
+            return redirect(url_for("codigo_recuperacion"))
         return redirect(url_for("inicio"))
-    return render_template("clave.html", sin_actual=sin_actual, info=info)
+    return render_template("clave.html", sin_actual=sin_actual, info=info, nuevo=session.get("nuevo_google"))
 
 
 @app.route("/recuperar", methods=["GET", "POST"])
@@ -375,7 +414,7 @@ def recuperar():
             return render_template("recuperar.html", google=nube.disponible())
         if A.recuperar_con_codigo(f.get("usuario", ""), f.get("codigo", ""), nueva):
             avisar_sincronizador()
-            flash("Listo, su clave fue cambiada. Ya puede entrar.")
+            flash("Listo, su clave fue cambiada. Ya puede entrar.", "ok")
             return redirect(url_for("login"))
         flash("El usuario o el código de recuperación no coinciden.")
     return render_template("recuperar.html", google=nube.disponible())
@@ -397,7 +436,7 @@ def usuario_editar(u):
         abort(404)
     if request.method == "POST":
         A.actualizar_perfil(u, request.form)
-        flash("Datos guardados.")
+        flash("Datos guardados.", "ok")
         return redirect(url_for("usuarios"))
     return render_template("perfil.html", modo="editar", datos=A.medicos()[u]["perfil"],
                            info=A.usuario_info(u))
@@ -417,14 +456,14 @@ def usuario_accion(u):
             if u == session["usuario"] and acc == "desactivar":
                 raise ValueError("No puede desactivar su propio usuario.")
             A.poner_activo(u, acc == "activar")
-            flash(f"Usuario «{u}» {'activado' if acc == 'activar' else 'desactivado'}.")
+            flash(f"Usuario «{u}» {'activado' if acc == 'activar' else 'desactivado'}.", "ok")
         elif acc in ("admin", "medico"):
             A.poner_rol(u, acc)
-            flash(f"«{u}» ahora es {'administrador' if acc == 'admin' else 'médico'}.")
+            flash(f"«{u}» ahora es {'administrador' if acc == 'admin' else 'médico'}.", "ok")
         elif acc == "desvincular":
             A.vincular_google(u, None)
             nube.desconectar(u)
-            flash(f"Se desvinculó la cuenta de Google de «{u}».")
+            flash(f"Se desvinculó la cuenta de Google de «{u}».", "ok")
     except ValueError as e:
         flash(str(e))
     return redirect(url_for("usuarios"))
@@ -973,6 +1012,13 @@ def mantenimiento():
     threading.Thread(target=actualizador.buscar, daemon=True).start()
     admins = [u for u in A.medicos() if A.es_admin(u)]
     nube.migrar_token_global(admins[0] if admins else None)
+    for u in A.medicos():  # vincular la cuenta de Google de quien ya tenía Drive conectado
+        c = nube.cuenta(u)
+        if c and not A.usuario_info(u)["google"] and not A.buscar_por_google(c.lower()):
+            try:
+                A.vincular_google(u, c.lower())
+            except ValueError:
+                pass
     for e in A.listar_estudios():
         if e["estado"] in ("procesando", "error"):  # interrumpidos o de versiones anteriores
             lanzar(e["codigo"])

@@ -2,12 +2,8 @@
 {% block titulo %}Mi Google Drive · EndoView{% endblock %}
 {% block css %}
   .estado{display:flex;align-items:center;gap:10px;font-weight:600;margin:6px 0 14px}
-  .punto{width:12px;height:12px;border-radius:50%;background:#C62828}
-  .punto.ok{background:#2E7D32}
-  code{background:#EEF1F4;padding:1px 6px;border-radius:4px;font-size:13px}
-  .g{display:inline-flex;align-items:center;gap:10px;background:#fff;color:#1F1F1F;border:1px solid #747775;
-     border-radius:22px;padding:11px 20px;font:600 15px system-ui,sans-serif;cursor:pointer}
-  .g:hover{background:#F6F8FA} .g:disabled{opacity:.6;cursor:wait}
+  .punto{width:10px;height:10px;border-radius:50%;background:var(--danger);box-shadow:0 0 0 4px var(--danger-bg)}
+  .punto.ok{background:var(--success);box-shadow:0 0 0 4px var(--success-bg)}
   ul.lista{margin:6px 0 0;padding-left:20px;color:var(--gris)} ul.lista li{margin:4px 0}
 {% endblock %}
 {% block contenido %}
@@ -29,9 +25,9 @@
       <li>Con esta misma cuenta puede <b>entrar con Google</b> y <b>recuperar su clave</b>.</li>
     </ul>
     <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap">
-      {% if pendientes %}<button class="btn" onclick="fetch('/api/sync/ahora',{method:'POST'}).then(()=>this.textContent='Subiendo…')">Subir pendientes ahora</button>{% endif %}
+      {% if pendientes %}<button class="btn" onclick="fetch('/api/sync/ahora',{method:'POST'}).then(()=>{this.textContent='Subiendo…';notificar('Se están subiendo sus estudios pendientes.')})">Subir pendientes ahora</button>{% endif %}
       <form method="post" action="{{ url_for('drive_desconectar') }}"
-            onsubmit="return confirm('¿Desconectar su Google Drive? Sus estudios nuevos se guardarán solo en esta computadora.')">
+            data-confirmar="¿Desconectar su Google Drive? Sus estudios nuevos se guardarán solo en esta computadora." data-peligro="1">
         <button class="btn sec">Desconectar o cambiar de cuenta</button>
       </form>
     </div>

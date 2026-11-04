@@ -1,7 +1,7 @@
 # Configuración de PyInstaller para generar EndoView.exe (carpeta dist\EndoView)
 from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-datas = [("templates", "templates"), ("cliente.dat", "."), ("icono.ico", ".")]
+datas = [("templates", "templates"), ("static", "static"), ("cliente.dat", "."), ("icono.ico", ".")]
 binaries, hiddenimports = [], []
 for paquete in ("webview", "imageio_ffmpeg", "reportlab"):
     d, b, h = collect_all(paquete)
